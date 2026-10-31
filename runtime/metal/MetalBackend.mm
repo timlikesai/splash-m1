@@ -1723,8 +1723,13 @@ MetalBackend::MetalBackend(std::string metallibPath, double residencyKeepAliveSe
         // A virtualized GPU has no residency sets, so nothing here keeps the
         // weights wired between commands: the host's free memory moves by the
         // weight size while a request runs, and the governor works from that.
-        if (!impl_->residency->available())
-            writeStderrLine("Metal: this device offers no residency set; buffers wire per command buffer.");
+        if (!impl_->residency->available()) {
+            static const bool announced = [] {
+                writeStderrLine("Metal: this device offers no residency set; buffers wire per command buffer.");
+                return true;
+            }();
+            (void) announced;  // one backend says it; a test that makes twenty says it once
+        }
     }
     impl_->sampleDeviceMemory();
 }

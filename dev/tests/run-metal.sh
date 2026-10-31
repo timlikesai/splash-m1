@@ -28,8 +28,12 @@ pattern="$1"
 skip="${SKIP_METAL:-}"
 ran=0
 failed=0
-echo "== $(cc -framework Metal -framework Foundation -o /tmp/device-info \
-        dev/tests/device-info.m 2>/dev/null && /tmp/device-info || echo 'device-info did not build')"
+if xcrun --sdk macosx cc -framework Metal -framework Foundation -o /tmp/splash-device-info \
+     dev/tests/device-info.m 2>/tmp/splash-device-info.err; then
+  echo "== $(/tmp/splash-device-info)"
+else
+  echo "== device-info did not build: $(tail -1 /tmp/splash-device-info.err)"
+fi
 while IFS= read -r command; do
   name=$(printf '%s' "$command" | grep -oE "engine-tests/[a-z0-9._-]+" | head -1 | sed 's|.*/||; s|\.[a-z]*$||')
   printf '%s' "$name" | grep -qE "$pattern" || continue
