@@ -7,13 +7,18 @@ lives in [docs/apple78-perf.md](../../../docs/apple78-perf.md).
 ## Use
 
 ```sh
-make build/engine-tests/gguf-projection-benchmark build/splash.metallib   # what the sweeps call
-dev/benchmarks/apple78/run.py --label baseline                            # record it
-# ... make one change, rebuild ...
-dev/benchmarks/apple78/run.py --label span-chain
-dev/benchmarks/apple78/compare.py dev/benchmarks/apple78/results/<host>-baseline.jsonl \
-                                  dev/benchmarks/apple78/results/<host>-span-chain.jsonl --chosen
+dev/benchmarks/apple78/run.py --label baseline --build       # build, then record
+# ... make one change ...
+dev/benchmarks/apple78/run.py --label staged-l4 --build
+dev/benchmarks/apple78/compare.py baseline staged-l4 --policy   # what the policy picks now
+dev/benchmarks/apple78/compare.py baseline staged-l4 --chosen   # row by row, same tile
 ```
+
+`--build` makes each sweep's binary before timing it. Without it a stale binary
+measures the previous policy and reports it as the current one, which is how
+this harness first "found" that a four-lane rule had no effect when it had
+every effect. A run's file is `<host>-<label>.jsonl`, and `compare.py` takes
+either that label or a path.
 
 Each run appends to `results/<host>-<label>.jsonl`: one JSON object per measured
 row, with the shape, the case (lane count or prefill chunk), the candidate tile
@@ -29,6 +34,8 @@ Useful flags:
 | `--resume` | skip the sweeps already in the output file, so an interrupted run finishes where it stopped |
 | `--dry-run` | print the commands, run nothing |
 | `--timeout SECONDS` | per sweep (default 3600) |
+| `run.py --build` | make each sweep's binary first (see above) |
+| `compare.py --policy` | the chosen row per shape and case, even where the tile changed |
 | `compare.py --chosen` | only the rows the policy actually picks, which is what a user feels |
 | `compare.py --tol 3` | what counts as a change rather than noise (default 2%) |
 

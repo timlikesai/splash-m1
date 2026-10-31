@@ -94,6 +94,16 @@ are one-lane decode numbers on the 27B's shapes unless stated.
 | MoE experts | MMA expert tiles, one gate/up pass | the ANE's share of an MoE layer; the shared expert is dense-shaped and always visited, the routed ones are not |
 | Coefficient chains | the span chain measured 2.4-2.8% at one lane | its form under the new per-coefficient-group chains, which is why it is off |
 
+## Taken
+
+- **A four-lane step of the 64-input-group affine weights stages on the MMA
+  kernels** (d9d77ed0). Found by the harness's first baseline: at one to three
+  lanes the register tile wins by 6-40%, at four it loses by 6.7-12.8%, and
+  Q4_K/IQ4_XS keep the register tile at every width, so the rule is the
+  coefficient's 64-input span rather than the row count. Three of 55 sweep
+  cases moved, none regressed. The vocabulary projection — the single largest
+  decode cost of a turn — gains 12.8%.
+
 ## Ranked opportunities
 
 Ordered by expected value per unit of risk, not by size.

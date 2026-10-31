@@ -117,6 +117,9 @@ def main() -> int:
     parser.add_argument("--skip", help="skip sweeps whose name matches this regex")
     parser.add_argument("--resume", action="store_true", help="skip sweeps already in the output file")
     parser.add_argument("--timeout", type=int, default=3600, help="seconds per sweep")
+    parser.add_argument("--build", action="store_true",
+                        help="make each sweep's binary before running it: a stale one "
+                             "measures the previous policy and reports it as the current")
     parser.add_argument("--dry-run", action="store_true", help="print what would run")
     args = parser.parse_args()
 
@@ -144,6 +147,18 @@ def main() -> int:
         for index, (name, command) in enumerate(sweeps, 1):
             started = time.time()
             print(f"[{index}/{len(sweeps)}] {name} ...", flush=True)
+            if args.build:
+                # The sweeps name their binaries under build/, which are exactly
+                # the make targets that rebuild them. Without this, a stale
+                # binary measures the previous policy and reports it as now.
+                target = command.split()[0]
+                if target.startswith("build/"):
+                    made = subprocess.run(["make", "-j4", target], cwd=ROOT,
+                                          capture_output=True, text=True)
+                    if made.returncode:
+                        print(f"    BUILD FAILED: {made.stderr.strip().splitlines()[-1:]}")
+                        failures += 1
+                        continue
             try:
                 result = subprocess.run(command, shell=True, cwd=ROOT, capture_output=True,
                                         text=True, timeout=args.timeout)

@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -31,6 +32,54 @@ def load(path: Path) -> dict[tuple[str, str, str], dict]:
     # A resumed file holds each measurement once per run; keep the last.
     return {key: values[-1] for key, values in rows.items()}
 
+def resolve(name: str) -> Path:
+    """A run's path, or just its label: `baseline` finds this host's baseline."""
+    path = Path(name)
+    if path.exists():
+        return path
+    host = os.uname().nodename
+    results = Path(__file__).resolve().parent / "results"
+    for candidate in (results / f"{host}-{name}.jsonl", results / f"{name}.jsonl"):
+        if candidate.exists():
+            return candidate
+    sys.exit(f"no run '{name}' under {results} (looked for {host}-{name}.jsonl)")
+
+def compare_policy(base: dict, new: dict, args) -> int:
+    """Per shape and case, the row each run's policy chose, and how they differ."""
+    def chosen(rows):
+        out = {}
+        for (shape, case, _label), record in rows.items():
+            if record.get("chosen"):
+                out[(shape, case)] = record
+        return out
+
+    old, cur = chosen(base), chosen(new)
+    keys = sorted(set(old) & set(cur))
+    moved = [(shape, case, old[(shape, case)], cur[(shape, case)])
+             for (shape, case) in keys
+             if abs(cur[(shape, case)]["ms"] / old[(shape, case)]["ms"] - 1) * 100 >= args.tol]
+    ratios = [cur[k]["ms"] / old[k]["ms"] for k in keys]
+    print(f"# policy chosen per case: {len(keys)} comparable, "
+          f"{len(moved)} moved {args.tol}% or more")
+    if args.all or moved:
+        for shape, case, before, after in sorted(
+                moved, key=lambda row: row[3]["ms"] / row[2]["ms"]):
+            print(f"  {(shape + ' ' + case)[:38]:<40} {before['label']:<16} {before['ms']:>8.4f}"
+                  f" -> {after['label']:<16} {after['ms']:>8.4f}  "
+                  f"{100 * (after['ms'] / before['ms'] - 1):+6.1f}%")
+    # Cases where the policy changed its tile at all, win or lose, are the ones
+    # a reader needs to see; the list above only shows those over the tolerance.
+    switched = [(s, c) for (s, c) in keys if old[(s, c)]["label"] != cur[(s, c)]["label"]]
+    print(f"  {len(switched)} case(s) chose a different tile or split")
+    for s, c in sorted(switched):
+        gain = 100 * (cur[(s, c)]["ms"] / old[(s, c)]["ms"] - 1)
+        print(f"    {(s + ' ' + c)[:44]:<46} {old[(s, c)]['label']} -> {cur[(s, c)]['label']}"
+              f" {gain:+.1f}%")
+    if ratios:
+        gm = math.exp(sum(map(math.log, ratios)) / len(ratios))
+        print(f"# geometric mean of the policy's chosen time: {(gm - 1) * 100:+.2f}%")
+    return 0
+
 
 def devices(rows) -> str:
     """What machine recorded these, for the warning when the two runs differ."""
@@ -43,8 +92,12 @@ def devices(rows) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Diff two Apple7/8 harness runs.")
-    parser.add_argument("baseline", type=Path)
-    parser.add_argument("candidate", type=Path)
+    parser.add_argument("baseline", help="a run's path, or just its label")
+    parser.add_argument("candidate", help="a run's path, or just its label")
+    parser.add_argument("--policy", action="store_true",
+                        help="compare what each run's policy chose per shape and case: "
+                             "after a policy change the chosen tile differs, so rows "
+                             "cannot be joined by label")
     parser.add_argument("--chosen", action="store_true",
                         help="only rows the policy chose in either run")
     parser.add_argument("--tol", type=float, default=2.0, help="percent that counts as a change")
@@ -52,7 +105,9 @@ def main() -> int:
     parser.add_argument("--all", action="store_true", help="print every comparable row")
     args = parser.parse_args()
 
-    base, new = load(args.baseline), load(args.candidate)
+    base, new = load(resolve(args.baseline)), load(resolve(args.candidate))
+    if args.policy:
+        return compare_policy(base, new, args)
     if not (base and new):
         print("nothing to compare: one of the files holds no rows", file=sys.stderr)
         return 2
