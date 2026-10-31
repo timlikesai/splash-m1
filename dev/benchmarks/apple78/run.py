@@ -43,8 +43,9 @@ CANDIDATE = re.compile(r"^(?P<label>.+?)(?P<chosen>\*)?\s+(?P<ms>\d+\.\d+)$")
 
 def git(*args: str) -> str:
     try:
-        return subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True,
-                              check=True).stdout.strip()
+        return subprocess.run(
+            ["git", *args], cwd=ROOT, capture_output=True, text=True, check=True
+        ).stdout.strip()
     except subprocess.CalledProcessError:
         return ""
 
@@ -77,7 +78,7 @@ def parse(output: str) -> list[dict]:
     """Every `label median` the benchmark printed, with its case and heading."""
     records, context = [], {}
     for line in output.splitlines():
-        if (heading := HEADING.match(line.strip())):
+        if heading := HEADING.match(line.strip()):
             context = heading.groupdict()
             continue
         if "|" not in line:
@@ -110,16 +111,23 @@ def done_sweeps(path: Path) -> set[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the Apple7/8 benchmark sweeps.")
-    parser.add_argument("--label", required=True, help="what this run is, e.g. baseline or span-chain")
+    parser.add_argument(
+        "--label", required=True, help="what this run is, e.g. baseline or span-chain"
+    )
     parser.add_argument("--sweeps", type=Path, default=HERE / "sweeps.txt")
     parser.add_argument("--out", type=Path, default=HERE / "results")
     parser.add_argument("--only", help="run sweeps whose name matches this regex")
     parser.add_argument("--skip", help="skip sweeps whose name matches this regex")
-    parser.add_argument("--resume", action="store_true", help="skip sweeps already in the output file")
+    parser.add_argument(
+        "--resume", action="store_true", help="skip sweeps already in the output file"
+    )
     parser.add_argument("--timeout", type=int, default=3600, help="seconds per sweep")
-    parser.add_argument("--build", action="store_true",
-                        help="make each sweep's binary before running it: a stale one "
-                             "measures the previous policy and reports it as the current")
+    parser.add_argument(
+        "--build",
+        action="store_true",
+        help="make each sweep's binary before running it: a stale one "
+        "measures the previous policy and reports it as the current",
+    )
     parser.add_argument("--dry-run", action="store_true", help="print what would run")
     args = parser.parse_args()
 
@@ -141,7 +149,9 @@ def main() -> int:
         return 0
 
     build = identity()
-    print(f"# {build['branch']} {build['git']}{' dirty' if build['dirty'] else ''} -> {destination}")
+    print(
+        f"# {build['branch']} {build['git']}{' dirty' if build['dirty'] else ''} -> {destination}"
+    )
     failures = 0
     with destination.open("a") as sink:
         for index, (name, command) in enumerate(sweeps, 1):
@@ -153,15 +163,27 @@ def main() -> int:
                 # binary measures the previous policy and reports it as now.
                 target = command.split()[0]
                 if target.startswith("build/"):
-                    made = subprocess.run(["make", "-j4", target], cwd=ROOT,
-                                          capture_output=True, text=True)
+                    made = subprocess.run(
+                        ["make", "-j4", target],
+                        cwd=ROOT,
+                        capture_output=True,
+                        text=True,
+                    )
                     if made.returncode:
-                        print(f"    BUILD FAILED: {made.stderr.strip().splitlines()[-1:]}")
+                        print(
+                            f"    BUILD FAILED: {made.stderr.strip().splitlines()[-1:]}"
+                        )
                         failures += 1
                         continue
             try:
-                result = subprocess.run(command, shell=True, cwd=ROOT, capture_output=True,
-                                        text=True, timeout=args.timeout)
+                result = subprocess.run(
+                    command,
+                    shell=True,
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                    timeout=args.timeout,
+                )
             except subprocess.TimeoutExpired:
                 print(f"    TIMEOUT after {args.timeout}s")
                 failures += 1
@@ -169,19 +191,33 @@ def main() -> int:
             took = time.time() - started
             records = parse(result.stdout)
             if not records:
-                print(f"    FAILED to measure anything ({result.returncode}): "
-                      f"{(result.stderr or result.stdout).strip().splitlines()[-1:]}")
+                print(
+                    f"    FAILED to measure anything ({result.returncode}): "
+                    f"{(result.stderr or result.stdout).strip().splitlines()[-1:]}"
+                )
                 failures += 1
                 continue
             for record in records:
-                record.update(build, sweep=name, seconds=round(took, 1),
-                              stamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+                record.update(
+                    build,
+                    sweep=name,
+                    seconds=round(took, 1),
+                    stamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                )
                 sink.write(json.dumps(record) + "\n")
             sink.flush()
-            best = min((r for r in records if r["chosen"]), key=lambda r: r["ms"], default=None)
-            chosen = f"chosen {best['case']} {best['label']} {best['ms']:.4f} ms" if best else "no chosen row"
+            best = min(
+                (r for r in records if r["chosen"]), key=lambda r: r["ms"], default=None
+            )
+            chosen = (
+                f"chosen {best['case']} {best['label']} {best['ms']:.4f} ms"
+                if best
+                else "no chosen row"
+            )
             print(f"    {len(records)} rows in {took:.0f}s; {chosen}")
-    print(f"# {'FAILED: ' + str(failures) + ' sweep(s)' if failures else 'all sweeps recorded'}")
+    print(
+        f"# {'FAILED: ' + str(failures) + ' sweep(s)' if failures else 'all sweeps recorded'}"
+    )
     return 1 if failures else 0
 
 
