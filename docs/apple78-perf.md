@@ -22,6 +22,15 @@ Rules that keep results comparable:
   rounds the tool asks for, and do not compare across different round counts.
 - Compare like with like: candidate against baseline from the same commit
   except for the one change, on the same machine, in the same session.
+- For an end-to-end number, build the baseline in a `git worktree` beside the
+  tree under test rather than checking it out: two binaries, no stash, no
+  half-built objects, and the runs interleave (before, after, before, after) so
+  a warming machine drifts both ways. The four-lane decode gain in Taken was
+  measured this way, and the interleaving is what makes its 0.3% spread
+  believable. It also caught something an A/B in one tree would not: the
+  revision first chosen as "before" carried b7b3d1c3's residency bug and
+  segfaulted on a Mac, while the same revision passed hosted CI, which has no
+  residency sets to break.
   See [the harness](../dev/benchmarks/apple78) for the mechanics.
 
 The tools that already exist, and what each is for:
@@ -102,7 +111,13 @@ are one-lane decode numbers on the 27B's shapes unless stated.
   Q4_K/IQ4_XS keep the register tile at every width, so the rule is the
   coefficient's 64-input span rather than the row count. Three of 55 sweep
   cases moved, none regressed. The vocabulary projection — the single largest
-  decode cost of a turn — gains 12.8%.
+  decode cost of a turn — gains 12.8%. End to end on the 27B-4bit itself
+  (`backend-benchmark --scenario decode --ane-ffn-share 0`, three samples, both
+  builds run twice interleaved from a separate worktree at e43c18e2): a batch of
+  four decodes **5.7% faster** (347.5 → 327.7 ms per cycle) and its 64-token
+  throughput 4.7% faster, while one, two and three lanes move by 0.1% or less
+  and prefill not at all — which is the change's signature, since only
+  four-lane plans were touched. Repeat runs agreed to 0.3%.
 
 - **The dense ANE split needs no tuning on these chips** (measured, not
   assumed). Qwen3.8-27B-4bit on the M2 Max, prefill FFN share forced with
