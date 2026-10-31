@@ -841,8 +841,8 @@ void ggufCoreLaws() {
                   }
                   const uint32_t s = c.splits;
                   require(s >= 1 && s <= LinearConfig::kMaximumSplits && (s & (s - 1)) == 0 &&
-                              c.spread == spreads &&
-                                  (!c.oneGateUpPass || (gateUp && (spreads || family <= 8))),
+                              c.spread == (staged && planned >= 16) &&
+                                  (!c.oneGateUpPass || (gateUp && (spreads || belowApple10))),
                           "GGUF decode plan split count, walk or passes");
                   require(s == 1 || (staged ? k / s >= 512 && (k / 32) % s == 0 : k / 256 / s >= 1),
                           "GGUF decode partition below the kernel floor");

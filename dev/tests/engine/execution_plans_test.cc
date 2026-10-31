@@ -147,11 +147,10 @@ void ggufMoePlans() {
     capabilities.gpuCoreCount = reportedCores;
     ExecutionPlans plans(capabilities);
     const uint32_t cores = plannedGpuCores(capabilities);
-    // Below Apple9, a shape whose shared expert takes two slices has no MMA kernels.
+    // Below Apple9 every GGUF expert format runs the MMA kernels; above it,
+    // an experts' format decides.
     const MoeGgufTile stagedTile =
-        gpuFamilyClass(family) == GpuFamilyClass::Apple7 && expected == MoeGgufTile::Mma
-            ? MoeGgufTile::Staged
-            : expected;
+        gpuFamilyClass(family) == GpuFamilyClass::Apple7 ? MoeGgufTile::Mma : MoeGgufTile::Staged;
     require(moeGgufTile(gpuFamilyClass(family), cores, shape) == expected,
             "GGUF expert tile is not gated on GPU family 9 of more than 10 cores");
     for (uint32_t lanes = 1; lanes <= 4; ++lanes) {
@@ -178,6 +177,15 @@ void ggufMoePlans() {
     f16.registerFormats = false;
     require(moeGgufTile(gpuFamilyClass(family), cores, f16) == stagedTile,
             "GGUF experts with an F16 weight took the register tile");
+    // The Apple7/8 MMA kernels are compiled for a shared expert of one slice:
+    // a routing of two (Flint's) stages instead.
+    MoeShape slices = q4k;
+    slices.router = MoeRouter::SigmoidNormalized;
+    slices.sharedSlices = 2;
+    slices.sharedGate = false;
+    require(moeGgufTile(gpuFamilyClass(family), cores, slices) ==
+                (gpuFamilyClass(family) == GpuFamilyClass::Apple7 ? MoeGgufTile::Staged : expected),
+            "GGUF experts of two shared slices took a tile with no kernels");
     for (uint32_t lanes = 1; lanes <= 4; ++lanes) {
       const MoePlan plan = plans.moeDecode(staged, lanes);
       require(plan.configuration().ggufTile == stagedTile && plan.workspace().groupedSumsBytes == 0,
