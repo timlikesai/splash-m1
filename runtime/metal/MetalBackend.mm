@@ -1720,6 +1720,11 @@ MetalBackend::MetalBackend(std::string metallibPath, double residencyKeepAliveSe
         impl_->residency = std::make_shared<Residency>(
             impl_->device, impl_->queue,
             impl_->newPipeline(impl_->library, Residency::kKickPipeline), residencyKeepAliveSeconds);
+        // A virtualized GPU has no residency sets, so nothing here keeps the
+        // weights wired between commands: the host's free memory moves by the
+        // weight size while a request runs, and the governor works from that.
+        if (!impl_->residency->available())
+            writeStderrLine("Metal: this device offers no residency set; buffers wire per command buffer.");
     }
     impl_->sampleDeviceMemory();
 }

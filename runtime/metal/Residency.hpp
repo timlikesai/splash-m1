@@ -37,6 +37,12 @@ public:
   // (kernels/shared/residency.metal).
   static constexpr std::string_view kKickPipeline = "residency_kick";
 
+  // A device without residency sets (a virtualized GPU, where
+  // newResidencySetWithDescriptor returns nil) gets an object that does
+  // nothing: Metal wires each buffer for the command buffers that name it, as
+  // it does when no set holds it. Callers cannot tell the difference, and the
+  // backend says so once at startup, because host memory then moves by the
+  // weight size while a request runs (MetalBackend::residencyAvailable).
   Residency(id<MTLDevice> device, id<MTLCommandQueue> commands,
             id<MTLComputePipelineState> kick, double keepAliveSeconds)
       : commands_(commands), kick_(kick), keepAlive_(keepAliveSeconds) {
@@ -44,22 +50,24 @@ public:
                                            error:nil];
     addressed_ = [device newResidencySetWithDescriptor:[MTLResidencySetDescriptor new]
                                                  error:nil];
+    if (!set_ || !addressed_) return;
     kickQueue_ = [device newCommandQueue];
     kickTarget_ = [device newBufferWithLength:sizeof(uint32_t)
                                       options:MTLResourceStorageModePrivate];
-    if (!set_ || !addressed_ || !kickQueue_ || !kickTarget_)
-      throw MetalBackendError("unable to create the Metal residency set");
+    if (!kickQueue_ || !kickTarget_)
+      throw MetalBackendError("unable to create the Metal residency kick");
+    available_ = true;
     [commands_ addResidencySet:addressed_];
     queue_ = dispatch_queue_create(
         "splash.metal.residency",
         dispatch_queue_attr_make_with_autorelease_frequency(
             DISPATCH_QUEUE_SERIAL, DISPATCH_AUTORELEASE_FREQUENCY_WORK_ITEM));
-    heartbeat_ = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue_);
     dispatch_source_set_event_handler(heartbeat_, ^{ beat(); });
     dispatch_activate(heartbeat_);
   }
 
   ~Residency() {
+    if (!available_) return;
     dispatch_source_cancel(heartbeat_);
     // Runs after any beat or request already queued: they use this object.
     // Metal applies the end at the process's next GPU operation, or frees
@@ -71,6 +79,9 @@ public:
     });
   }
 
+  // Whether this device had residency sets at all.
+  [[nodiscard]] bool available() const noexcept { return available_; }
+
   Residency(const Residency &) = delete;
   Residency &operator=(const Residency &) = delete;
 
@@ -78,6 +89,7 @@ public:
   // restarts the keep-alive: a held set wires it at the commit, and a lapsed
   // one is requested again off the caller's thread (use()).
   void add(id<MTLBuffer> buffer, BufferReach reach) {
+    if (!available_) return;
     dispatch_sync(queue_, ^{
       [set_ addAllocation:buffer];
       [set_ commit];
@@ -90,6 +102,7 @@ public:
   }
 
   void remove(id<MTLBuffer> buffer, BufferReach reach) {
+    if (!available_) return;
     dispatch_sync(queue_, ^{
       [set_ removeAllocation:buffer];
       [set_ commit];
@@ -103,6 +116,7 @@ public:
   // Marks a command. A lapsed set is requested again at once, off the
   // caller's thread, and the heartbeat resumes.
   void use() {
+    if (!available_) return;
     {
       std::lock_guard lock(mutex_);
       lastUse_ = AwakeClock::now();
@@ -159,6 +173,8 @@ private:
   std::mutex mutex_;
   AwakeClock::time_point lastUse_;
   bool held_ = false;
+  // False on a device with no residency sets, where everything here is inert.
+  bool available_ = false;
 };
 
 } // namespace splash::metal
