@@ -149,11 +149,12 @@ are one-lane decode numbers on the 27B's shapes unless stated.
   `q3k` on the same MMA tile by 18% at an 8-row random decode (0.701 against
   0.858 ms), 20% pooled (0.335 against 0.417) and 10% on a 2048-row prefill
   chunk. End to end it loses, by 16%: 40.9 against 34.2 ms per one-lane decode
-  cycle, 161 against 184 tok/s, because a decode step is bandwidth and the
-  4-bit affine weights carry more bytes per input than Q3_K (13.6 GB of experts
-  against 17.3 GB, but wider per row at the planes the tiles walk). The tile
-  choice is right for both formats; the package choice is a bandwidth question
-  an old Mac user can actually make, and Q3_K_XL wins it at 30 cores.
+  cycle, 161 against 184 tok/s, because a decode step is dominated by weight
+  traffic and the 4-bit affine weights carry more bytes per input than Q3_K:
+  13.6 GB of experts against 17.3 GB overall, but wider per row at the planes
+  the tiles walk. The tile choice is right for both formats; the package choice
+  is a bandwidth question an old Mac user can actually make, and Q3_K_XL wins
+  it at 30 cores.
 - **Memory is the binding constraint on a 32 GB machine, not the GPU.** With the
   routed experts resident (17.3 GB of them), the 35B refuses to start above a
   4096-token context: "unable to allocate a lane's state: host memory reserve
@@ -196,17 +197,19 @@ the remaining ANE question is not the share but the 75.7 s it costs on a new
 macOS version, and whether a family-fitted starting guess would shorten the
 search rather than replace it.
 
-**4. MoE on the ANE, shared expert first.** The routed experts are the bulk of
-an MoE layer but their work is gathered per row through selected-expert tables,
-which is the opposite of the static shapes an ANE program wants. The *shared*
-expert is dense-shaped, visited by every row, and already runs as its own pass.
-That makes it the only MoE candidate worth a first measurement: take the MoE
-benchmark's gate/up versus down split for a real layer, and ask what fraction
-of a step's FFN time the shared expert is at the top-k the model uses. If it is
-worth chasing, the design question is whether a fixed-row-count shared-expert
-program can be handed to the ANE while the routed passes run on the GPU, which
-is the shape of the dense split already in the tree. *Decides:* whether to
-design further or to stop; it is explicitly a stretch goal.
+**4. ~~MoE on the ANE, shared expert first.~~ Closed as not worth a program.**
+Measured on Qwen3.6-35B-A3B (256 experts, top 8, shared expert one slice) on
+the M2 Max: an MoE step is almost entirely expert time -- 40 layers at 0.813 ms
+of gate/up and down kernels is 32.5 of a 34.2 ms one-lane decode cycle -- and
+the shared expert is one route in nine, so ~11% of a decode step and ~5% of a
+2048-row prefill chunk (2.2 of 19.6 ms per layer, 40 layers, 1699 ms). The
+runtime already refuses the dense FFN split for MoE outright (`ane_ffn_share:
+0`, `ane_ffn_bytes: 0` on the real model). A new ANE program class for one
+slice, with routed passes still on the GPU, could therefore win a few percent
+at absolute best and would carry every risk of the split's synchronization --
+where the dense split won 24% because the whole FFN moved. MoE's FFN time is
+better spent on the expert tiles themselves, which is what the `_s2` work and
+item 2 (fp16 activations, which halves what an activation table costs) address.
 
 **5. Compile the register attention tile for 128-dimension heads.** Upstream's
 1.5 geometry table added a 128-dimension, sinks-and-window model class. The
@@ -223,10 +226,17 @@ replaces, so the win is not assumed until measured at 128 on this hardware.
 **6. Re-derive the span chain.** Worth 2.4-2.8% at one lane, 0.7-1.6% at two to
 four. Blocked on the chain restructure, not on measurement.
 
-**7. Check the 64-row tile's policy here.** It exists on this branch because
-upstream routes 33-to-64-row prefill chunks through it; the instances compile,
-but the choice was measured on M5 hardware. `benchmark-gguf-projection` with
-`prefill=33,64` answers it directly.
+**7. The 64-row prefill tile, answered for the tile that is offered.** The
+harness's `prefill-tiles-q4k-17408x5120` sweep at R33 and R64 on the M2 Max:
+the policy's `prefill128` takes 1.700 and 1.703 ms against every staged
+candidate it was offered (4.71 to 5.17 ms) -- 2.8x, and the near-identical
+times for 33 and 64 rows are the 128-row tile padding both to one height. So
+keeping Apple7/8 on the prefill tile is right, and upstream's Apple10
+exception (`LinearGguf.cpp`: staged only to `kMaximumDecodeTileRows` unless
+`family_ == Apple10`) should not be copied here. What the sweep cannot say is
+how a *64-row* staged tile would do, because the benchmark never builds one on
+this family -- the candidates are decode-shaped splits. That is a five-line
+tool change, and only then a measurement.
 
 **8. Retune the display-facing bounds per machine.** `kIsolatedPrefillMilliseconds`
 (5 s) and `kPrefillAttentionPieceWork` (2^25 row-history pairs) were picked so a
