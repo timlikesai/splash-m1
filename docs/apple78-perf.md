@@ -143,6 +143,26 @@ are one-lane decode numbers on the 27B's shapes unless stated.
   and `ane::remember` keeps it in the per-user cache, so a restart is free. The
   opportunity listed below as "give ANE a fairer share" is closed: a fitted
   share beats a hand-picked one here too.
+- **Qwen3.6-35B-A3B, both packages, measured here** (a real MoE at last: 256
+  experts, top 8, shared expert one slice, so the MMA expert tile it ships).
+  Per-layer expert tiles at 7 rounds favour the MLX package: `af4g64` beats
+  `q3k` on the same MMA tile by 18% at an 8-row random decode (0.701 against
+  0.858 ms), 20% pooled (0.335 against 0.417) and 10% on a 2048-row prefill
+  chunk. End to end it loses, by 16%: 40.9 against 34.2 ms per one-lane decode
+  cycle, 161 against 184 tok/s, because a decode step is bandwidth and the
+  4-bit affine weights carry more bytes per input than Q3_K (13.6 GB of experts
+  against 17.3 GB, but wider per row at the planes the tiles walk). The tile
+  choice is right for both formats; the package choice is a bandwidth question
+  an old Mac user can actually make, and Q3_K_XL wins it at 30 cores.
+- **Memory is the binding constraint on a 32 GB machine, not the GPU.** With the
+  routed experts resident (17.3 GB of them), the 35B refuses to start above a
+  4096-token context: "unable to allocate a lane's state: host memory reserve
+  protected". `--expert-memory BYTES` streams the experts instead and is the
+  route to these models on an 8- or 16 GB M1; it is a `serve` and engine option
+  (`runtime/main.mm`, `NativeArguments.cpp`), not a `backend-benchmark` one, so
+  its cost is unmeasured here and is the first thing to characterize on the
+  M1 Ultra, where it will be the only way a 35B MoE and a long context coexist
+  with anything else running.
 
 ## Ranked opportunities
 
@@ -215,6 +235,59 @@ M1 want different numbers, and the wrong one costs throughput (too small) or a
 wedged GPU (too large).
 
 
+## What the other machines are for
+
+Nothing here is a mystery that only new hardware can explain; each machine
+closes a specific numbered item, and the harness records the family and core
+count with every row, so results from different machines never mix silently.
+
+**An M1 Ultra 128 GB would be the most valuable machine by far, because every
+number in this file comes from family 8: nothing since the 1.5 merge has run on
+family 7 itself.** Every kernel name, tile and
+fallback gated at `GpuFamilyClass::Apple7` — the MMA expert tiles, the `_sgf`
+register attention, the four-lane staged rule, the split tiers — has only been
+executed on family 8. That is an untested half of the port, not an unoptimized
+one, and it is worth doing before any tuning:
+
+```sh
+make -j8 && make test-engine-cpu && dev/tests/run-metal.sh '.'   # all 40, ~1-2 h at 64 cores
+dev/benchmarks/apple78/run.py --label m1ultra-baseline --build   # the projection sweeps
+dev/benchmarks/apple78/ane.py sweep --root "$MLX27B" --share 0 --share 0.25 --calibrated
+```
+
+Then, in order of what they would settle: whether the register attention tile's
+numerics hold on family 7 hardware (it was written for 7 and 8 and measured on
+neither); whether `_s2` MoE MMA tiles and the four-lane affine rule win at 64
+cores as they do at 30; and what the ANE calibration costs and chooses when the
+GPU is a generation older and the memory is 128 GB, which is the first
+configuration where a 35B MoE, a 128K context and streamed experts all coexist
+(`--expert-memory`, unmeasured anywhere).
+
+**The M2 Ultra (family 8, up to 76 cores)** closes item 1 and item 8, the two
+that are fits over a range rather than correctness questions:
+
+- Item 1, the split tiers: `dev/benchmarks/apple78/run.py --label m2ultra-tiers
+  --build`, then `compare.py baseline m2ultra-tiers --policy` shows how far the
+  `{24, 512}` / `{24, 256}` threadgroups-per-core rule, fitted at 30 and 32
+  cores, drifts at 64 and 76. A 2% mean at one end is nothing; 15% is a law.
+  Sweeping splits explicitly (`benchmark-gguf-projection`, splits 1 to 16 over
+  the 27B and 35B shapes) gives the occupancy curve the Apple10 law was built
+  from, which is what would replace the tiers.
+- Item 8, the display-facing bounds: `kIsolatedPrefillMilliseconds` and
+  `kPrefillAttentionPieceWork` are one number for every GPU. At 76 cores a
+  5-second prefill bound is 2.5x more work per command than at 30; at 8 cores
+  it is less. Measure with `backend-benchmark --scenario context` on each, and
+  watch for the abort that bound exists to prevent.
+- The MoE spill path at 64 cores with 128 or 192 GB, where resident experts
+  stop being a question — the counterfactual for the memory finding in Taken.
+
+**A base M1 or M2 (7 to 10 cores, 8 to 16 GB)** is the other end of item 1 and
+the only place the fork's most likely user lives. It is where `--expert-memory`
+spilling is not an experiment but the default configuration, where a 27B at
+four lanes may prefer staging for reasons of memory rather than arithmetic, and
+where the 832-thread threadgroup cap and the register tile's residency are
+closest to biting. Same commands as the Ultra, plus `serve --expert-memory` at
+the sizes a 16 GB machine can actually hold.
 ## Things deliberately not to chase
 
 - Making the MPP tensor path fast by trying harder. The `_sgf`/`_mma` kernels
