@@ -712,8 +712,10 @@ inline void decode_fragment_paired(device const TableElem<F32> *table, device co
             else a[nf][f] = operand<F>(cur[nf][q], f, lut);
           }
 #pragma unroll
-          for (uint h = 0; h < S::CG; ++h) cs[h][nf] = cu[((us * 2 + q) * S::CG + h) * NC + nf * 8 + fm];
+          for (uint h = 0; h < S::CG; ++h) cs[h][nf] = cu[((us * 2 + q) * S::CG + h) / S::CPG * NC + nf * 8 + fm];
         }
+        // Whether this 32-input group of the table closes a term's inputs, a coefficient group or its span.
+        const bool closes = ((us * 2 + q) * S::CG + S::CG) % S::MinChains == 0;
 #pragma unroll
         for (uint r = 0; r < L; ++r) {
           const vec<T, 8> bq = xt[ulong(r) * K + (8 * q + fm) * 4 + c];
@@ -721,11 +723,20 @@ inline void decode_fragment_paired(device const TableElem<F32> *table, device co
 #pragma unroll
           for (uint f = 0; f < 4; ++f) b[f] = reinterpret_cast<thread const vec<T, 2> *>(&bq)[f];
           float2 sum = float2(0), seed[S::CG];
-          if (S::HasMin && !S::Seeded) sum = *(device const float2 *)(s32 + ulong(r) * tileSums + q * 8 + fn);
+          if ((S::HasMin || S::Seeded) && S::CG == 1 && closes) {
+            // The sum of the term's inputs: this 32-input sum and, closing a term of 64 inputs, the span's other.
+            sum = *(device const float2 *)(s32 + ulong(r) * tileSums + q * 8 + fn);
 #pragma unroll
-          for (uint h = 0; h < S::CG; ++h)
-            seed[h] = S::Seeded && !centered ? *(device const float2 *)(seeds + ulong(r) * tileSums + (2 * q + h) * 8 + fn)
-                                : float2(0);
+            for (uint t = 1; t < S::MinChains; ++t) {
+              const int earlier = int(q) - int(t);   // an earlier 32-input group of the span
+              sum += *(device const float2 *)(s32 + ulong(r) * tileSums + fn + earlier * 8);
+            }
+          }
+#pragma unroll
+          for (uint h = 0; h < S::CG; ++h)   // a 16-input chain's seed from the table, a term's once from its sum
+            seed[h] = !S::Seeded || centered ? float2(0)   // a centered chain's operand already leaves the zero point
+                      : S::CG == 2 ? *(device const float2 *)(seeds + ulong(r) * tileSums + (2 * q + h) * 8 + fn)
+                                   : -float(kZeroPointOffset) * sum;
 #pragma unroll
           for (uint h = 0; h < S::CG; ++h) {
 #pragma unroll
@@ -739,7 +750,7 @@ inline void decode_fragment_paired(device const TableElem<F32> *table, device co
                 acc[r][nf] = fma(sum, cs[h][nf].y, acc[r][nf]);
               } else if constexpr (S::HasMin) {
                 acc[r][nf] = fma(dot, cs[h][nf].x, acc[r][nf]);
-                acc[r][nf] = fma(S::Seeded ? seed[h] : sum, cs[h][nf].y, acc[r][nf]);
+                if (S::Seeded || closes) acc[r][nf] = fma(S::Seeded ? seed[h] : sum, cs[h][nf].y, acc[r][nf]);
               } else if constexpr (centered) {
                 acc[r][nf] = fma(dot, float(cs[h][nf]), acc[r][nf]);
               } else {
