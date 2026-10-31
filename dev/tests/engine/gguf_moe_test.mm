@@ -164,9 +164,13 @@ bool inside(float got, double exact, double bound) {
 // Apple7/8 run the staged plans on their MMA kernels (MoeGgufTile::Mma), in two gate/up passes, and neither the
 // Apple9 register tile nor the neural accelerator tiles, whose MPP matmuls run far below their MMA rate.
 bool mmaTiles(const MetalBackend &backend) { return backend.capabilities().appleGpuFamily < 9; }
-std::vector<MoeGgufTile> moeTiles(const MetalBackend &backend) {
-  return mmaTiles(backend) ? std::vector<MoeGgufTile>{MoeGgufTile::Mma}
-                           : std::vector<MoeGgufTile>{MoeGgufTile::Staged, MoeGgufTile::Register};
+// The tiles of a shape, as ops::moeGgufTile chooses them: Apple7/8 run a
+// shape's staged plans on the MMA kernels, which are compiled for a shared
+// expert of one slice. Another routing stages on the shipped tiles.
+std::vector<MoeGgufTile> moeTiles(const MetalBackend &backend, MoeShape shape) {
+  if (!mmaTiles(backend)) return {MoeGgufTile::Staged, MoeGgufTile::Register};
+  return shape.sharedSlices == 1 ? std::vector<MoeGgufTile>{MoeGgufTile::Mma}
+                                 : std::vector<MoeGgufTile>{MoeGgufTile::Staged};
 }
 std::vector<FloatTile> floatTiles(const MetalBackend &backend) {
   return mmaTiles(backend) ? std::vector<FloatTile>{FloatTile::Simdgroup}
@@ -1108,7 +1112,7 @@ int moe(MetalBackend &backend) {
     }
   };
   // Each tile runs the models of the formats it takes (makeModel).
-  for (const MoeGgufTile tile : moeTiles(backend))
+  for (const MoeGgufTile tile : moeTiles(backend, shape))
     for (const Fmt f : tileFormats(tile))
       for (const bool upInGateFormats : {false, true}) {
         if (upInGateFormats && tile == MoeGgufTile::Register) continue;   // two passes whatever the formats
@@ -1324,7 +1328,7 @@ int permutedSlots(MetalBackend &backend) {
   const MoeShape shape = kShape;
   const auto sigma = [](uint32_t expert) { return (expert * 7 + 3) % kExperts; };
   int failures = 0;
-  for (const MoeGgufTile tile : moeTiles(backend)) {
+  for (const MoeGgufTile tile : moeTiles(backend, shape)) {
     const Model m = makeModel(backend, shape, tileFormats(tile).front(), false, tile);
     Model permuted = m;
     MetalBuffer table = backend.allocateBuffer(uint64_t{kExperts} * sizeof(uint32_t), BufferStorage::Shared,
@@ -1386,7 +1390,7 @@ int verifiedRows(MetalBackend &backend) {
   const MoeShape shape = kShape;
   constexpr std::array<uint32_t, 4> kVerify{8, 5, 2, 1};
   int failures = 0;
-  for (const MoeGgufTile tile : moeTiles(backend)) {
+  for (const MoeGgufTile tile : moeTiles(backend, shape)) {
     const Model m = makeModel(backend, shape, tileFormats(tile).front(), false, tile);
     const MoePlan plan = MoE::decodePlan(shape, 4, MoeConfig{.expertTile = MoeExpertTile::M8, .ggufTile = tile});
     const uint32_t rows = plan.rows(), tileRows = plan.tileRows();
