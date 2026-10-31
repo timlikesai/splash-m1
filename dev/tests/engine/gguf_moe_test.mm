@@ -1224,7 +1224,7 @@ int routingLoads(MetalBackend &backend) {
     for (const uint32_t rows : {256u, 48u, 12u, 1u}) {
       const MoePlan plan = MoE::prefillPlan(
           shape, rows,
-          MoeConfig{.expertTile = MoeExpertTile::M32, .ggufTile = mmaTiles(backend) ? MoeGgufTile::Mma : MoeGgufTile::Staged});
+          MoeConfig{.expertTile = MoeExpertTile::M32, .ggufTile = moeTiles(backend, shape).front()});
       const std::string label = formats + " " + name + " prefill rows=" + std::to_string(rows);
       const MoeRun result = runPlan(backend, m, b, plan, true, products, stats, label);
       const auto *selected = static_cast<const uint32_t *>(b.moe.scratch.selectedExperts.contents());
