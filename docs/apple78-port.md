@@ -110,13 +110,19 @@ measured: whether Apple7/8 want the 64-row tile at all, or 32, is unmeasured.
 Every claim about this branch needs a machine of its own, because upstream's CI
 matrix is M3 or newer and its hosted jobs build but never run the Metal tests.
 
-On an M2 Max (30-core GPU, family 8, macOS 27):
+On an M2 Max (30-core GPU, family 8, macOS 27) — the only Apple7/8 machine with
+its GPU free to be measured, until CI covers it:
 
 - `make` builds the runtime and every Metal kernel.
 - `make test-engine-cpu` passes.
-- The `test-engine-metal` commands run under `MTL_SHADER_VALIDATION=1`.
-  Recorded timings for each command live with the benchmark harness so the
-  suite can be split into a job a hosted runner can finish.
+- All 40 `test-engine-metal` commands pass, each under `MTL_SHADER_VALIDATION=1`
+  (`dev/tests/run-metal.sh --list` prints them). The run is about 46 minutes on
+  this machine, and four groups dominate it — the same groups that catch this
+  branch's own regressions, so they are what a CI job has to afford:
+  `q8-flash-attention` 905 s and `q8-chunked-prefill` 268 s; `gguf-moe` 460,
+  `gguf-moe-e512` 429, `gguf-moe-sigmoid` 244; `gguf-projection`,
+  `paged-attention-plan`, `gdn-decode` and `ane-ffn faults` about 80 each;
+  everything else together under 180.
 
 Three defects the merge introduced were found this way and fixed, each by a
 test rather than by reading: a missing `gguf_decode_mma_q4k_m64_a`, one-pass
