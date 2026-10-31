@@ -1607,9 +1607,18 @@ class RuntimeTests(unittest.TestCase):
 
     def test_concurrent_waiters_share_one_failed_startup(self):
         factory = FakeFactory(initial_output=b"")
+        # The startup's own deadline has to be wide against the time it takes
+        # four threads to reach wait_ready, or a waiter whose attempt ends
+        # before its peers get there starts a second process and the sharing
+        # this checks for is decided by the scheduler. A four-core CI runner at
+        # 0.2 s did exactly that -- "AssertionError: 2 != 1" -- while this
+        # machine's eight cores never did. The elapsed bound below is stated in
+        # multiples of the timeout, so widening it costs the test nothing it
+        # asserts: four serialized startups would still take four times as long.
+        startup_timeout = 2.0
         runtime = engine_runtime.MultiplexedRuntime(
             process_factory=factory,
-            startup_timeout=0.2,
+            startup_timeout=startup_timeout,
         )
         self.addCleanup(runtime.close)
         barrier = threading.Barrier(4)
@@ -1624,7 +1633,7 @@ class RuntimeTests(unittest.TestCase):
             list(executor.map(wait_ready, range(4)))
         elapsed = time.monotonic() - started
         self.assertEqual(len(factory.processes), 1)
-        self.assertLess(elapsed, 0.5)
+        self.assertLess(elapsed, 2 * startup_timeout)
 
     def test_close_interrupts_an_in_progress_startup(self):
         factory = FakeFactory(initial_output=b"")

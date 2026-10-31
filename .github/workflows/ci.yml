@@ -77,15 +77,17 @@ jobs:
           actual=$(.venv/bin/python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
           test "$actual" = "${{ matrix.python-version }}"
 
-  # Upstream's hosted jobs build the Metal tests but never run them, because no
-  # hosted runner has a GPU family 9 or newer. That gap is this fork's hardware:
-  # Apple7/8 is what these runners are, and the port's kernels are what they
-  # would run. A few minutes of the suite, chosen for coverage of the port's own
-  # kernel families and for finishing on a four-core machine, so a pushed
-  # regression in a kernel name or a numerics bound fails here rather than on
-  # someone's Mac. dev/tests/run-metal.sh prints the rest of what the suite is.
+  # Upstream's hosted jobs build the Metal tests but never run them. This fork's
+  # kernels are chosen by GPU family, so a hosted run is worth minutes only if
+  # the runner's family is one the port cares about — and its hardware is not a
+  # Mac: run-metal.sh prints a device probe first, which says what it is. What is
+  # known from the first runs: it creates no Metal residency set (hence the
+  # Residency fallback), it has no ANE (ane-ffn's kernels fail to compile there,
+  # so SKIP_METAL drops them), and its qsa_pool results differ from an M2 Max's,
+  # which is the one open question before this job can be trusted as a gate.
+  # dev/tests/run-metal.sh prints the rest of what the suite is.
   apple78-metal:
-    name: Metal suite on the port's own hardware (hosted)
+    name: Metal suite on a hosted runner (virtual GPU)
     runs-on: macos-26
     timeout-minutes: 90
     steps:
@@ -93,9 +95,9 @@ jobs:
       - uses: Homebrew/actions/setup-homebrew@d482da0e602890d3160aade42e72c8556103bf04
       - name: Install the Metal toolchain
         run: xcodebuild -downloadComponent MetalToolchain
-      - name: What GPU is this
-        run: system_profiler SPDisplaysDataType | sed -n '1,12p'
       - name: Run the port's Metal tests
+        env:
+          SKIP_METAL: 'ane-ffn|ane-program-faults'
         run: >-
           dev/tests/run-metal.sh
           'gguf-dequant|gguf-rotation|gguf-projection|norm-table|ane-ffn|ane-program-faults|qwen4-kernels|attention-plan|linear-plan|paged-attention-plan|metal-backend'

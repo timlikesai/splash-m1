@@ -23,11 +23,17 @@ fi
 
 [ $# -ge 1 ] || { sed -n '2,14p' "$0"; exit 2; }
 pattern="$1"
+# SKIP_METAL drops tests the machine cannot serve: a hosted runner has no ANE,
+# and ane-ffn's kernels then fail to compile at startup, not at runtime.
+skip="${SKIP_METAL:-}"
 ran=0
 failed=0
+echo "== $(cc -framework Metal -framework Foundation -o /tmp/device-info \
+        dev/tests/device-info.m 2>/dev/null && /tmp/device-info || echo 'device-info did not build')"
 while IFS= read -r command; do
   name=$(printf '%s' "$command" | grep -oE "engine-tests/[a-z0-9._-]+" | head -1 | sed 's|.*/||; s|\.[a-z]*$||')
   printf '%s' "$name" | grep -qE "$pattern" || continue
+  [ -n "$skip" ] && printf '%s' "$name" | grep -qE "$skip" && { echo "== $name: skipped (SKIP_METAL)"; continue; }
   # Build what this command runs and links, then run it as the recipe does.
   targets=$(printf '%s' "$command" | grep -oE "build/(engine-tests/[a-zA-Z0-9._-]+|splash\.metallib)" |
     grep -v '\.config$' | sort -u | tr '\n' ' ')
