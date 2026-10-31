@@ -1,0 +1,31 @@
+# Apple7/8 benchmark sweeps: `name<TAB>command`, run from the repository root.
+#
+# Every command is dev/benchmarks/gguf_projection_benchmark (build it with
+# `make build/engine-tests/gguf-projection-benchmark`), whose arguments are
+#   <metallib> <fmt> <N> <K> [none|residual|gateup] [rounds] [prefill=R[,R...]]
+# and whose output the harness parses into one row per candidate tile and split.
+#
+# The shapes are the ones the Apple7/8 split tiers were fitted on (a 32-core
+# M1 Max and a 30-core M2 Max, runtime/ops/LinearGguf.cpp), so a change to that
+# policy shows up here, and so does a change on a machine the tier never saw:
+# run this file on base, Pro and Ultra hardware and compare each to its own
+# baseline. Add a sweep when a policy rule starts claiming to know something.
+#
+# Rounds: 25 keeps the median stable for a projection of a few hundred
+# microseconds; the vocabulary and prefill sweeps cost too much per round for
+# that and are allowed fewer. Keep the count for anything you intend to compare.
+
+dense-q4k-17408x5120	build/engine-tests/gguf-projection-benchmark build/splash.metallib q4k 17408 5120 none 25
+dense-q4k-5120x17408	build/engine-tests/gguf-projection-benchmark build/splash.metallib q4k 5120 17408 none 25
+dense-q4k-12288x5120	build/engine-tests/gguf-projection-benchmark build/splash.metallib q4k 12288 5120 none 25
+dense-q4k-5120x6144	build/engine-tests/gguf-projection-benchmark build/splash.metallib q4k 5120 6144 none 25
+dense-q4k-2048x512	build/engine-tests/gguf-projection-benchmark build/splash.metallib q4k 2048 512 none 25
+vocab-q4k-248320x5120	build/engine-tests/gguf-projection-benchmark build/splash.metallib q4k 248320 5120 none 10
+mlx-4bit-17408x5120	build/engine-tests/gguf-projection-benchmark build/splash.metallib af4g64 17408 5120 none 25
+mlx-4bit-5120x17408	build/engine-tests/gguf-projection-benchmark build/splash.metallib af4g64 5120 17408 none 25
+gateup-q4k-17408x5120	build/engine-tests/gguf-projection-benchmark build/splash.metallib q4k 17408 5120 gateup 15
+gateup-mlx-4bit-17408x5120	build/engine-tests/gguf-projection-benchmark build/splash.metallib af4g64 17408 5120 gateup 15
+lowbit-iq4xs-17408x5120	build/engine-tests/gguf-projection-benchmark build/splash.metallib iq4xs 17408 5120 none 25
+lowbit-q5k-12288x5120	build/engine-tests/gguf-projection-benchmark build/splash.metallib q5k 12288 5120 none 25
+prefill-tiles-q4k-17408x5120	build/engine-tests/gguf-projection-benchmark build/splash.metallib q4k 17408 5120 none 10 prefill=33,64,256
+float-router-f32	build/engine-tests/gguf-projection-benchmark build/splash.metallib float-f32 256 2048 none 25

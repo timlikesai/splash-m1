@@ -11,3 +11,6 @@ __pycache__/
 dist/
 app/.build/
 install/download-token
+
+# Apple7/8 harness results belong to whoever ran them (dev/benchmarks/apple78).
+dev/benchmarks/apple78/results/
