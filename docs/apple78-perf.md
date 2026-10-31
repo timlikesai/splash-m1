@@ -144,26 +144,36 @@ are one-lane decode numbers on the 27B's shapes unless stated.
   opportunity listed below as "give ANE a fairer share" is closed: a fitted
   share beats a hand-picked one here too.
 - **Qwen3.6-35B-A3B, both packages, measured here** (a real MoE at last: 256
-  experts, top 8, shared expert one slice, so the MMA expert tile it ships).
-  Per-layer expert tiles at 7 rounds favour the MLX package: `af4g64` beats
-  `q3k` on the same MMA tile by 18% at an 8-row random decode (0.701 against
-  0.858 ms), 20% pooled (0.335 against 0.417) and 10% on a 2048-row prefill
-  chunk. End to end it loses, by 16%: 40.9 against 34.2 ms per one-lane decode
-  cycle, 161 against 184 tok/s, because a decode step is dominated by weight
-  traffic and the 4-bit affine weights carry more bytes per input than Q3_K:
-  13.6 GB of experts against 17.3 GB overall, but wider per row at the planes
-  the tiles walk. The tile choice is right for both formats; the package choice
-  is a bandwidth question an old Mac user can actually make, and Q3_K_XL wins
-  it at 30 cores.
-- **Memory is the binding constraint on a 32 GB machine, not the GPU.** With the
-  routed experts resident (17.3 GB of them), the 35B refuses to start above a
-  4096-token context: "unable to allocate a lane's state: host memory reserve
-  protected". `--expert-memory BYTES` streams the experts instead and is the
-  route to these models on an 8- or 16 GB M1; it is a `serve` and engine option
-  (`runtime/main.mm`, `NativeArguments.cpp`), not a `backend-benchmark` one, so
-  its cost is unmeasured here and is the first thing to characterize on the
-  M1 Ultra, where it will be the only way a 35B MoE and a long context coexist
-  with anything else running.
+  experts, top 8, shared expert one slice, so the MMA expert tile applies).
+  End to end the **MLX 4-bit package is the faster one**: 34.2 ms per one-lane
+  decode cycle against the GGUF UD-Q3_K_XL's 40.9 (184 against 161 tok/s), and
+  1699 against 1762 ms for a 2048-row prefill — while holding *more* expert
+  bytes: 17.3 GB of experts resident against 13.6 GB. The per-layer tiles say
+  why: `af4g64` beats `q3k` on the same MMA tile by 18% at an 8-row random
+  decode (0.701 against 0.858 ms) and 20% pooled (0.335 against 0.417). So MoE
+  decode on this machine is not bandwidth-bound -- it spends its time
+  dequantizing, where the affine format has no super-block scale chains to
+  walk. That is an argument for item 2 (fp16 activations, which halves what an
+  activation table costs) and for cheaper dequantization on the MMA tile, not
+  for shaving bits off the weights. At four lanes the two packages converge
+  (323 against 324 tok/s), where the per-token weight traffic that does
+  differentiate them is amortized across the batch.
+- **Streaming the routed experts is a last resort, and the numbers say so.**
+  With every expert resident (17.3 GB of them) the 35B refuses to start past a
+  4096-token context on 32 GB -- "unable to allocate a lane's state: host memory
+  reserve protected" -- so streaming is how these models run on a small Mac at
+  all. `decode-profile` on the MLX package, 6 cycles per width, 512-token prompt,
+  with the fused column (what a user feels) and the sum of attributed dispatch
+  times: at `--expert-memory 64G` everything is resident, 553.9 ms prefill and
+  102.3 / 78.6 / 96.3 / 121.0 ms for B1-B4 cycles, against 477 / 34.6 / 47.3 /
+  61.6 / 80.3 ms as separate dispatches. Give it `2G` -- 15 GB of experts
+  streamed from the SSD cache, which is what a 16 GB M1 does with a 35B MoE --
+  and the dispatch *work* rises only 1.2-1.7x (817 ms prefill, 42.2 / 79.2 /
+  87.1 / 154.6 ms), while the fused commands take 9.7x on prefill and 2.9-10x
+  on the cycles (5384.8 ms, 292.8 / 518.8 / 980.6 / 949.7). The GPU is not
+  doing more, it is waiting: which is worth knowing before anyone recommends a
+  35B MoE on an 8 GB machine, and worth re-measuring on family 7, where both
+  the GPU and the SSD controller are a generation older.
 
 ## Ranked opportunities
 
