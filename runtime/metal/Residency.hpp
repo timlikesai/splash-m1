@@ -62,6 +62,7 @@ public:
         "splash.metal.residency",
         dispatch_queue_attr_make_with_autorelease_frequency(
             DISPATCH_QUEUE_SERIAL, DISPATCH_AUTORELEASE_FREQUENCY_WORK_ITEM));
+    heartbeat_ = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue_);
     dispatch_source_set_event_handler(heartbeat_, ^{ beat(); });
     dispatch_activate(heartbeat_);
   }

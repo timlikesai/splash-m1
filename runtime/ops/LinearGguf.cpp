@@ -316,6 +316,14 @@ bool apple7GateUpFormat(std::span<const Projection *const> projections) {
   return oneFormat(projections) && !quant_affine_format(projections.front()->blocks().segments.front().formatId);
 }
 
+// Whether a segment is an affine weight whose coefficients span 64 inputs:
+// two groups of 32 per meta unit, which is what makes the staged MMA tile
+// worth its dequantization at four lanes (ggufBaseline). The 32-input formats
+// have one group per meta unit and the 128-input ones four.
+bool apple7StagesSpanFormat(const QuantizedSegment &s) {
+  return quant_affine_format(s.formatId) && kQuantFormats[s.formatId].meta_groups == 2;
+}
+
 // Whether Apple9 decodes a plan's projections (a gate/up plan's two) on the
 // staged tile: where it holds the lanes' rows unpadded, so the plan binds the
 // register tile's rows, and every quantized segment is in a format of
@@ -524,6 +532,21 @@ LinearConfig Linear::ggufBaseline(LinearWorkload w, std::span<const Projection *
   // Apple7/8 run its F32 instances wherever every format takes it: the MMA
   // tile's per-element dequantization through threadgroup memory bounds MLX
   // 4-bit decode there.
+  // A four-lane step of the affine weights whose coefficients span 64 inputs
+  // (MLX 4-bit and 8-bit) stages on the MMA kernels rather than running the
+  // register tile: at 32 rows the staged tile's per-element dequantization
+  // pays for itself, where at one to three the register tile wins by 6 to 40%.
+  // On a 30-core M2 Max, the staged tile's best split against the register
+  // tile's best, one projection: +5.7% at 12288x5120, +6.4% at 5120x6144,
+  // +6.7% at 17408x5120, +6.8% for its gate/up pair and +7.2% at
+  // 5120x17408, +8.2% for af8g64, +12.8% for the vocabulary's 248320x5120;
+  // af4g64 repeats within 0.2% over two runs. Q4_K keeps the register tile at
+  // four lanes (staged is 6.8% slower there), and af4g128 gains only +1.2%,
+  // so the rule is the coefficient's 64-input span, not the rows alone.
+  if (mmaTiles(family_) && w.phase == LinearPhase::Decode &&
+      w.rows == 4 * SPLASH_TARGET_VERIFY_ROWS &&
+      everyQuantizedSegment(projections, apple7StagesSpanFormat))
+    return stagedDecode(n, k, w.rows, weightBits16(projections, shape), gpuCores_, family_);
   if (mmaTiles(family_) && shape.registerFormats && everyQuantizedSegment(projections, registerTileTakes)) {
     LinearConfig config = registerDecode(n, k, gpuCores_);
     config.fp32Table = true;
