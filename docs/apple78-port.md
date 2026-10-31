@@ -124,6 +124,18 @@ turns out to be no Mac at all (see below):
   `gguf-moe-e512` 429, `gguf-moe-sigmoid` 244; `gguf-projection`,
   `paged-attention-plan`, `gdn-decode` and `ane-ffn faults` about 80 each;
   everything else together under 180.
+- CI on this fork is green end to end (`e43c18e2` made it run at all, by naming
+  runners a personal fork can use; `b7b3d1c3`, `d9d77ed0` and `9b9a734c` fixed
+  what the first runs exposed): the CPU job, Python compatibility on 3.12, 3.13
+  and 3.14, and a Metal job on `macos-26` gating the port's kernel numerics and
+  plan selection. Two of its early failures were this branch's own: a residency
+  set that every Mac offers and no hosted runner does, and a Python test whose
+  0.2 s startup deadline let the scheduler rather than the code decide how many
+  engines started. Three checks disagree with the VM rather than the branch —
+  qsa_pool's mean keys in all ten of its cases, paged_attention's test that a
+  bf16 store leaves its source bits and neighbouring page slots untouched, and
+  metal-backend's function-replacement check, which reports "replacement method
+  is missing" where no compiler backs it — and run as an informational step.
 
 Three defects the merge introduced were found this way and fixed, each by a
 test rather than by reading: a missing `gguf_decode_mma_q4k_m64_a`, one-pass

@@ -179,7 +179,13 @@ design further or to stop; it is explicitly a stretch goal.
 1.5 geometry table added a 128-dimension, sinks-and-window model class. The
 register tile falls back to MPP there, which is correct and slow, so a new
 model of that shape will look broken on old hardware. The tile is templated on
-`HeadDim` now, so this is mostly instantiation and numerics work.
+`HeadDim` now, but the register kernels here are not: `paged_attention_sgf.h`
+reads `SPLASH_KV_HEAD_DIMENSION` as a build-time constant in its tile body
+(line 150) and in its addressing (line 194), so this is first a
+parameterization of `D` through `q8sgf::tile` and its register budget, then
+instantiation, then numerics. Doubling `D` doubles what a tile holds in
+registers, and a tile that spills is plausibly slower than the MPP path it
+replaces, so the win is not assumed until measured at 128 on this hardware.
 
 **6. Re-derive the span chain.** Worth 2.4-2.8% at one lane, 0.7-1.6% at two to
 four. Blocked on the chain restructure, not on measurement.
