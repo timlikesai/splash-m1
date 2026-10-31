@@ -177,15 +177,20 @@ void ggufMoePlans() {
     f16.registerFormats = false;
     require(moeGgufTile(gpuFamilyClass(family), cores, f16) == stagedTile,
             "GGUF experts with an F16 weight took the register tile");
-    // The Apple7/8 MMA kernels are compiled for a shared expert of one slice:
-    // a routing of two (Flint's) stages instead.
+    // The Apple7/8 MMA kernels are compiled for shared experts of one or two
+    // slices (moe_gguf_mma.metal's `_s2` instances, which Flint's routing
+    // needs); a wider one still stages, whose MPP matmul those GPUs run slowly.
     MoeShape slices = q4k;
     slices.router = MoeRouter::SigmoidNormalized;
     slices.sharedSlices = 2;
     slices.sharedGate = false;
     require(moeGgufTile(gpuFamilyClass(family), cores, slices) ==
+                (gpuFamilyClass(family) == GpuFamilyClass::Apple7 ? MoeGgufTile::Mma : expected),
+            "GGUF experts of two shared slices did not take the MMA tile compiled for them");
+    slices.sharedSlices = 3;
+    require(moeGgufTile(gpuFamilyClass(family), cores, slices) ==
                 (gpuFamilyClass(family) == GpuFamilyClass::Apple7 ? MoeGgufTile::Staged : expected),
-            "GGUF experts of two shared slices took a tile with no kernels");
+            "GGUF experts of three shared slices took a tile with no kernels");
     for (uint32_t lanes = 1; lanes <= 4; ++lanes) {
       const MoePlan plan = plans.moeDecode(staged, lanes);
       require(plan.configuration().ggufTile == stagedTile && plan.workspace().groupedSumsBytes == 0,

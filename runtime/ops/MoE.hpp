@@ -261,13 +261,14 @@ enum class MoeGgufTile : uint8_t { Staged, Register, Mma };
 // pass and its column tile for an expert's lone tile of one or two rows: at
 // their code the M4 too ran Q4_K/Q5_K, Q2_K and IQ4_XS experts 2-15% faster on
 // the register tile, so larger GPUs, unmeasured since, keep it.
-// Apple7/8 take the MMA tile wherever its kernels are compiled: a shared
-// expert of one slice. Another routing runs the staged tile, whose MPP matmul
-// those GPUs run slowly rather than not at all.
+// Apple7/8 take the MMA tile wherever its kernels are compiled: shared experts
+// of one or two slices (moe_gguf_mma.metal's `_s2` instances). A wider routing
+// runs the staged tile, whose MPP matmul those GPUs run slowly rather than not
+// at all.
 [[nodiscard]] inline MoeGgufTile moeGgufTile(GpuFamilyClass family, uint32_t cores,
                                              MoeShape shape) noexcept {
   if (family == GpuFamilyClass::Apple7)
-    return shape.sharedSlices == 1 ? MoeGgufTile::Mma : MoeGgufTile::Staged;
+    return shape.sharedSlices <= 2 ? MoeGgufTile::Mma : MoeGgufTile::Staged;
   return family == GpuFamilyClass::Apple9 && cores > 10 && shape.registerFormats &&
                  !apple9StagesFormat(shape.expertFormat)
              ? MoeGgufTile::Register

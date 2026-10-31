@@ -166,10 +166,10 @@ bool inside(float got, double exact, double bound) {
 bool mmaTiles(const MetalBackend &backend) { return backend.capabilities().appleGpuFamily < 9; }
 // The tiles of a shape, as ops::moeGgufTile chooses them: Apple7/8 run a
 // shape's staged plans on the MMA kernels, which are compiled for a shared
-// expert of one slice. Another routing stages on the shipped tiles.
+// experts of one or two slices. A wider routing stages on the shipped tiles.
 std::vector<MoeGgufTile> moeTiles(const MetalBackend &backend, MoeShape shape) {
   if (!mmaTiles(backend)) return {MoeGgufTile::Staged, MoeGgufTile::Register};
-  return shape.sharedSlices == 1 ? std::vector<MoeGgufTile>{MoeGgufTile::Mma}
+  return shape.sharedSlices <= 2 ? std::vector<MoeGgufTile>{MoeGgufTile::Mma}
                                  : std::vector<MoeGgufTile>{MoeGgufTile::Staged};
 }
 std::vector<FloatTile> floatTiles(const MetalBackend &backend) {

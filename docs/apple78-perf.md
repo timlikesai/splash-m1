@@ -100,7 +100,7 @@ are one-lane decode numbers on the 27B's shapes unless stated.
 | Split count / threadgroups per core | fitted tiers of 24 threadgroups per core (staged) and 24 with a 256-input floor (register), from an M1 Max and an M2 Max | whether a fitted occupancy law, as Apple10 now has, beats a tier across 7 to 76 cores |
 | Attention tile | the MPP tensor path holds most of a long-context prefill chunk or verify cycle, which is why the register tile exists; the end-to-end it enabled is measured (27B on an M1 Max: cold 8K prefill 135 tok/s, 1.5K append 121) | the 128-dimension, window and sinks geometries have no register kernels, so a model that uses them runs the slow path here |
 | Prefill command length | bounded to about 5 s so macOS does not abort it | the right bound per machine class, and whether the attention piece-work bound (2^25 row-history pairs) is what actually protects the display |
-| MoE experts | the routed passes' MPP `matmul2d` replaced by simdgroup MMA (`moe_expert_gguf_mma_m*`), which is what Apple7/8 run for a one-slice shared expert; a two-slice routing still lands on the MPP kernels, because the MMA ones were never compiled for it | the ANE's share of an MoE layer; the shared expert is dense-shaped and always visited, the routed ones are not |
+| MoE experts | simdgroup MMA expert tiles for shared experts of one **or two** slices, measured on Qwen3.6-35B-A3B's shapes and Flint's; a wider routing still lands on the MPP `matmul2d` | the ANE's share of an MoE layer — the runtime refuses the dense FFN split outright (`ane_ffn_share: 0` on a real MoE), so the shared expert would need its own program; at top 8 of 256 with a 512-wide shared expert against 8 × 512 routed, that is about one ninth of the layer's FFN work |
 | Coefficient chains | the span chain measured 2.4-2.8% at one lane | its form under the new per-coefficient-group chains, which is why it is off |
 
 ## Taken
@@ -119,6 +119,19 @@ are one-lane decode numbers on the 27B's shapes unless stated.
   and prefill not at all — which is the change's signature, since only
   four-lane plans were touched. Repeat runs agreed to 0.3%.
 
+- **Two-slice MoE routings run their experts on tensor hardware now.** The MMA
+  expert kernels existed only for a one-slice shared expert, so Flint-class
+  routings — sigmoid router, shared expert two experts wide — fell to the
+  staged tile and its MPP `matmul2d`. `moe_gguf_segment<Slices>` was already
+  generic, so this was four instantiations (`moe_expert_gguf_mma_m{8,32}_{a,g}_s2`)
+  and lifting the `sharedSlices == 1` condition. On a 30-core M2 Max at q3k,
+  7 rounds, `gguf-moe-benchmark flint`: a 2048-row prefill chunk **48% faster**
+  (19.2 ms against 37.2), 512 rows 41%, 64 rows 19%, and pooled decode 21-27%
+  faster at 8 to 32 rows. The one case the staged tile still wins is *random*
+  routing at 8 and 16 rows, by 5% and 4% — a single sequence's verify rows share
+  their experts far more than that, so the policy keeps MMA throughout.
+  `gguf-moe-sigmoid` builds the test with `GGUF_MOE_SHARED_SLICES=2`, so the
+  numerics here are the shipped test, not a custom run.
 - **The dense ANE split needs no tuning on these chips** (measured, not
   assumed). Qwen3.8-27B-4bit on the M2 Max, prefill FFN share forced with
   `--ane-ffn-share`, medians of two samples over eleven scenario and length
@@ -201,17 +214,6 @@ Max-class GPU would not abort a long prefill. A 76-core Ultra and an 8-core base
 M1 want different numbers, and the wrong one costs throughput (too small) or a
 wedged GPU (too large).
 
-**9. Compile the two-slice MoE MMA kernels.** Listed last because it was found
-last, not because it ranks there: it is the cheapest item on this list.
-`moeGgufTile` sends Apple7/8 to the MMA expert tile only when the shared expert
-is one slice, and to `MoeGgufTile::Staged` otherwise — which on these
-generations is the MPP `matmul2d` this file's first rule says to avoid. Qwen3
-Next-class routings, two-slice shared experts, therefore decode on the slow
-path, and `gguf-moe-sigmoid` (which exercises `_s2`) covers the routing kernels
-but not expert tiles that do not exist. The work is the `_s2` instantiations of
-`moe_expert_gguf_mma_m*` and their numerics in the same test, then flipping the
-`sharedSlices == 1` condition away. *Decides:* whether a two-slice MoE on an M1
-or M2 runs its experts on tensor hardware at all.
 
 ## Things deliberately not to chase
 

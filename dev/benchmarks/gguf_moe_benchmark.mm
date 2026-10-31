@@ -149,10 +149,21 @@ int timing(MetalBackend &backend, const MoeShape &shape, uint32_t rounds, Fmt ga
     return 100.0 * column / tiles;
   };
   const splash::ops::ExecutionPlans plans(backend.capabilities());
-  const auto otherTile = [](MoeGgufTile tile) {
-    return tile == MoeGgufTile::Register ? MoeGgufTile::Staged : MoeGgufTile::Register;
+  // Apple7/8 run the MMA expert tile, which this tool predates: without these
+  // two it prints "staged" for a plan that is not staged, and offers the
+  // register tile -- which those GPUs cannot dispatch -- as the alternative.
+  const bool mmaFamily = splash::ops::gpuFamilyClass(backend.capabilities().appleGpuFamily) ==
+                         splash::ops::GpuFamilyClass::Apple7;
+  const auto otherTile = [mmaFamily](MoeGgufTile tile) {
+    if (tile == MoeGgufTile::Mma) return MoeGgufTile::Staged;
+    if (tile == MoeGgufTile::Staged) return mmaFamily ? MoeGgufTile::Mma : MoeGgufTile::Register;
+    return MoeGgufTile::Staged;
   };
-  const auto tileName = [](MoeGgufTile tile) { return tile == MoeGgufTile::Register ? "register" : "staged"; };
+  const auto tileName = [](MoeGgufTile tile) {
+    return tile == MoeGgufTile::Register ? "register"
+           : tile == MoeGgufTile::Mma    ? "mma"
+                                         : "staged";
+  };
   printf("%s, GPU family %u, %u cores: MoE %ux%u, %u experts, top %u, %s router, %u shared slice(s)%s, %s/%s/%s, "
          "median GPU ms per layer of %u rounds\n",
          backend.capabilities().deviceName.c_str(), backend.capabilities().appleGpuFamily,
