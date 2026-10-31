@@ -111,7 +111,8 @@ Every claim about this branch needs a machine of its own, because upstream's CI
 matrix is M3 or newer and its hosted jobs build but never run the Metal tests.
 
 On an M2 Max (30-core GPU, family 8, macOS 27) — the only Apple7/8 machine with
-its GPU free to be measured, until CI covers it:
+its GPU free to be measured: hosted CI runs a subset of it, on hardware that
+turns out to be no Mac at all (see below):
 
 - `make` builds the runtime and every Metal kernel.
 - `make test-engine-cpu` passes.
@@ -136,9 +137,19 @@ two-slice MoE prefill plan naming `moe_expert_gguf_mma_m32_a_s2`.
   32-core M1 Max and a 30-core M2 Max, and base M1/M2 (7-10 cores) and the
   M2 Ultra (up to 76 cores) are unmeasured.
 - Compile the register attention tile for the 128-dimension geometry.
-- Measure the Neural Engine's share on these GPUs, dense first and MoE after,
-  where the GPU is comparatively slower and the case for splitting is stronger
-  than on the hardware upstream tuned against.
-- Run the Metal suite on Apple7/8 hardware in CI: GitHub's hosted macOS runners
-  are exactly this hardware class, which is why upstream's comment says they
-  cannot run the Metal tests at all.
+- ~~Measure the Neural Engine's share on these GPUs, dense first~~ done, and it
+  needs nothing (docs/apple78-perf.md, Taken): the runtime's calibration beats
+  every fixed share tried, by 24.1% over the GPU alone. MoE remains open, and
+  harder — the routed experts are gathered per row, which is the opposite of the
+  static shape an ANE program wants.
+- ~~Run the Metal suite on Apple7/8 hardware in CI~~ the hosted runners are
+  **not** this hardware class, which is what the first runs had to establish:
+  GitHub's `macos-26` arm64 runner is a virtual GPU with no residency set, no
+  ANE, and its own answers for bf16 stores and QSA pool means. The job that
+  exists now gates on what it can settle — the port's kernel names, dequant,
+  rotation, projection numerics, norm tables, plan selection, and a build of
+  every Metal kernel — and runs the three that disagree as a reported,
+  non-gating step. `dev/tests/device-info.m` prints what the machine claims,
+  so a future failure can be read rather than guessed at. A real M1/M2 remains
+  the only place the full suite means anything, which is what the
+  `release-hardware` dispatch matrix is for when someone's own Mac is registered.
