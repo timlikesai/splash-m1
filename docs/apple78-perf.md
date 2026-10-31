@@ -104,6 +104,18 @@ are one-lane decode numbers on the 27B's shapes unless stated.
   cases moved, none regressed. The vocabulary projection — the single largest
   decode cost of a turn — gains 12.8%.
 
+- **The dense ANE split needs no tuning on these chips** (measured, not
+  assumed). Qwen3.8-27B-4bit on the M2 Max, prefill FFN share forced with
+  `--ane-ffn-share`, medians of two samples over eleven scenario and length
+  combinations (`dev/benchmarks/apple78/ane.py`): a 0.25 share is 15.4% faster
+  than the GPU alone, 0.5 is 17.1% faster, and the runtime's own calibration —
+  which chose 0.41 with a 256-row minimum — is **24.1% faster**, beating both
+  fixed shares on every row including the 480-row chunks below its stated
+  minimum. Calibration costs 75.7 s once per model, device and macOS version,
+  and `ane::remember` keeps it in the per-user cache, so a restart is free. The
+  opportunity listed below as "give ANE a fairer share" is closed: a fitted
+  share beats a hand-picked one here too.
+
 ## Ranked opportunities
 
 Ordered by expected value per unit of risk, not by size.
@@ -130,15 +142,11 @@ slack bounds in `dev/tuning/LinearNumerics.hpp` and the per-format numerics
 tests. *Decides:* per format, whether outputs stay inside the slack the tests
 allow, and what the projections and end-to-end decode do about it.
 
-**3. Give the ANE a fair share on these GPUs.** The split is already device
-calibrated, so the first step is to *look*: what share does the calibration
-pick on an M2 Max, and how much prefill time does the split actually save
-(`benchmark-decode-profile`, and the `--disable-ane` comparison the code logs).
-Upstream tuned its thresholds where the GPU is relatively strong; the same
-thresholds are conservative here. A calibration that measures more neighbours
-is safer than a policy that assumes a bigger share, and the fork already added
-`model.timeSplit` for exactly that. *Decides:* whether any threshold should
-move, with numbers rather than a hunch.
+**3. ~~Give the ANE a fair share on these GPUs.~~ Closed** — see Taken. The
+calibration's own choice beats a fixed share by 7 points of prefill time, so
+the remaining ANE question is not the share but the 75.7 s it costs on a new
+macOS version, and whether a family-fitted starting guess would shorten the
+search rather than replace it.
 
 **4. MoE on the ANE, shared expert first.** The routed experts are the bulk of
 an MoE layer but their work is gathered per row through selected-expert tables,
