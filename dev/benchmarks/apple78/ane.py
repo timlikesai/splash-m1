@@ -60,8 +60,42 @@ def label(path: Path) -> str:
     return found[-1] if found else path.stem
 
 
-def compare(paths: list[Path], tol: float) -> int:
+def identity(path: Path) -> tuple[str, str]:
+    """The model and device a run measured, from its own identity record.
+
+    A results file that does not say what it ran is how one package's numbers
+    ended up described as the other's: two roots of the same model differ in
+    their first eight characters by nothing a reader would notice.
+    """
+    for line in path.open():
+        record = json.loads(line)
+        if record.get("event") == "identity":
+            who = record["identity"]
+            root = who.get("model_root", "?")
+            name = Path(root).name
+            try:  # the directory is a hash; the model's name is what a reader compares
+                with (Path(root) / "model.json").open() as record:
+                    name = json.load(record).get("model", name)
+            except OSError:
+                pass
+            return (name, who.get("device", "?"))
+    return ("?", "?")
+
+
+def compare(paths: list[Path], tol: float, allow_mixed: bool = False) -> int:
     runs = [(label(p), rows(p)) for p in paths]
+    names = [label(p) for p in paths]
+    print(
+        "# "
+        + "; ".join(
+            f"{n} = {identity(p)[0]} on {identity(p)[1]}" for n, p in zip(names, paths)
+        )
+    )
+    if len({identity(p) for p in paths}) > 1 and not allow_mixed:
+        sys.exit(
+            "those runs measured different models or devices (see the line above); "
+            "comparing them reports a difference that is not the change's"
+        )
     if not runs:
         print("nothing to compare", file=sys.stderr)
         return 2
@@ -171,6 +205,11 @@ def main() -> int:
     one = where.add_parser("compare", help="print the medians of runs already taken")
     one.add_argument("paths", nargs="+", type=Path)
     one.add_argument("--tol", type=float, default=1.0, help="percent that is a change")
+    one.add_argument(
+        "--allow-mixed",
+        action="store_true",
+        help="compare runs of different models anyway, for looking at, not for quoting",
+    )
     one.set_defaults(function=compare)
 
     two = where.add_parser("sweep", help="run the shares, one at a time")
@@ -202,7 +241,7 @@ def main() -> int:
 
     args = parser.parse_args()
     if args.mode == "compare":
-        return compare(args.paths, args.tol)
+        return compare(args.paths, args.tol, args.allow_mixed)
     return sweep(args)
 
 
