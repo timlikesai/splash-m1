@@ -255,14 +255,15 @@ bool Engine::tick(double now) {
   if (progressed)
     sweepTerminal();
   if (pending_) {
-    auto forwardMaskRequests = [&] {
+    auto advance = [&] {
+      pending_->ticket->advance();
       for (ModelMaskRequest &asked : pending_->ticket->takeMaskRequests()) {
         events_.maskRequested(asked.requestId, asked.simulationTokens);
         request(asked.requestId).maskRequestedMilliseconds = now;
         progressed = true;
       }
     };
-    forwardMaskRequests();
+    advance();
     for (const BatchItem &item : pending_->plan.items) {
       Request &active = request(item.requestId);
       if (!active.pendingEnd && active.request.deadlineMilliseconds <= now) {
@@ -272,7 +273,7 @@ bool Engine::tick(double now) {
     }
     // A mask response, cancellation, or deadline can make the commit tail
     // runnable without another Metal completion wake.
-    forwardMaskRequests();
+    advance();
     if (!pending_->ticket->ready())
       return progressed;
     Pending command = std::move(*pending_);
@@ -1429,6 +1430,12 @@ void Engine::publishReachedStateBoundaries(
     materialized = true;
     endedAtBoundary = objective.tokens == promptProcessed;
     const uint64_t block = cache_.blockAt(active.request.id, objective.tokens);
+    // A windowed layout's state restores only through a Full tail, which
+    // the command that computed it, or held it in its window, leaves so.
+    if (!cache_.stateTailFull(block)) {
+      ++failures;
+      continue;
+    }
     // The state is in use before any of the ways below keeps it, so each of
     // them makes room as work in use.
     if (replay)
@@ -1527,6 +1534,12 @@ Engine::Prepared Engine::prepare(BatchPlan &plan, std::vector<ModelBatchItem> &i
                                  std::vector<std::vector<Capture>> &captures, double now) {
   const bool prefill = plan.kind == WorkKind::Prefill;
   const bool spill = config_.spill.capable;
+  // Whether a lane, of the given KV mode if one is named, is in service.
+  const auto inService = [&](std::optional<KvMode> mode) {
+    return std::any_of(requests_.begin(), requests_.end(), [&](const auto &entry) {
+      return entry.second.lane && (!mode || entry.second.kvMode == *mode);
+    });
+  };
   // Pages whose copies have landed leave memory before any lane grows; the
   // Index runway they draw on refills if memory allows. The Full extents
   // they empty leave memory too, but one, the runway, while a spilling
@@ -1538,11 +1551,19 @@ Engine::Prepared Engine::prepare(BatchPlan &plan, std::vector<ModelBatchItem> &i
   if (spill) {
     const SpilledExtents extents =
         spillingPrompt() || config_.growthPaused() ? SpilledExtents::KeepRunway : SpilledExtents::Released;
-    const bool inService = std::any_of(requests_.begin(), requests_.end(), [](const auto &entry) {
-      return entry.second.lane && entry.second.kvMode == KvMode::Spill;
-    });
-    static_cast<void>(allocate([&] { return cache_.spillWritten(extents); }, inService,
+    static_cast<void>(allocate([&] { return cache_.spillWritten(extents); }, inService(KvMode::Spill),
                                ReclaimClass::Ordinary, {}, true));
+  }
+  // So do a windowed layout's windowed layers' K/V of the pages every
+  // window has passed, the processed rows' (Cache::trimWindows): into the
+  // Slim runway and what memory allows, the rest Full for a later pass. A
+  // Slim page takes a fraction of the Full page it frees for the lanes to
+  // grow into, so the Slim extents are memory the lanes in service need: the
+  // host's pause holds them back only while none is, and a long prompt's
+  // pages trim as it prefills rather than filling the budget Full.
+  {
+    const Serving mark(config_.serving, inService(std::nullopt));
+    static_cast<void>(cache_.trimWindows());
   }
   // A command's later passes run its item again: the lane holds what it
   // needs, and only its page table may have changed, as moves between
@@ -1738,15 +1759,23 @@ Engine::Prepared Engine::prepare(BatchPlan &plan, std::vector<ModelBatchItem> &i
   // can release its lane before completed prefill is discarded.
   if (denied.empty())
     throw std::logic_error("empty resource admission result");
+  // No lane runs: the copies Spill requests owe and have not started, as a
+  // chain a lane restored has before its first command or those the memory
+  // governor's pass left when it collected the ones that landed, start now.
+  // A lane alone waits while they are written (judge).
+  if (spill)
+    static_cast<void>(cache_.writeThrough());
   // Memory on its way back arrives without anyone yielding. The lanes still
   // take a retry deadline: the transfer's completion wakes the engine, and
   // the deadline is what makes the wait end if that wake is ever missed.
-  if (std::any_of(denied.begin(), denied.end(),
-                  [](const Denied &entry) { return entry.denial.pending; })) {
+  const auto wait = [&] {
     for (const Denied &entry : denied)
       deferResourceRetry(request(entry.requestId), now, entry.denial);
     return Prepared::Waiting;
-  }
+  };
+  if (std::any_of(denied.begin(), denied.end(),
+                  [](const Denied &entry) { return entry.denial.pending; }))
+    return wait();
   const Denied &victim = *std::min_element(
       denied.begin(), denied.end(),
       [&](const Denied &left, const Denied &right) {
@@ -1762,12 +1791,20 @@ Engine::Prepared Engine::prepare(BatchPlan &plan, std::vector<ModelBatchItem> &i
   // capacity, not to the blocked lane's requirement.
   const uint64_t resumeTarget =
       own != denied.end() ? own->workEnd : kvCapacity(active.request.id);
-  if (judge(victim.denial, active.request.id) != Verdict::Fail) {
+  switch (judge(victim.denial, active.request.id)) {
+  case Verdict::Wait:
+    // Alone, it waits for the copies owed, retrying as they land, within the
+    // resource wait its first refusal started: copies that never land, or
+    // keep failing, end it there.
+    return wait();
+  case Verdict::Yield:
     suspendForGrowth(active, resumeTarget, victim.denial.allocationFailure, now);
     return Prepared::Yielded;
+  case Verdict::Fail:
+    break;
   }
-  // Alone with nothing left to reclaim. A Spill lane that decodes ends at
-  // its length once the SSD cache can hold no more of its KV.
+  // Alone with nothing left to reclaim or write. A Spill lane that decodes
+  // ends at its length once the SSD cache can hold no more of its KV.
   Request &lone = request(victim.requestId);
   if (!victim.kv)
     settle(lone, capacityExhausted(victim.memory, victim.denial.allocationFailure));
@@ -1990,6 +2027,10 @@ Engine::Verdict Engine::judge(const Denial &denial, uint64_t requestId) const {
   if (anotherResident(requestId) ||
       denial.allocationFailure == metal::AllocationFailure::HostPressure)
     return Verdict::Yield;
+  // Alone, it waits for the copies Spill requests owe, the slowest memory
+  // to come back: they free its Full pages as the SSD cache writes them.
+  if (cache_.owedCopiesReturn(denial.pages, denial.form))
+    return Verdict::Wait;
   return Verdict::Fail;
 }
 
@@ -2045,6 +2086,10 @@ auto Engine::allocate(Attempt &&attempt, bool inService, ReclaimClass upTo,
   if (!admission.granted()) {
     denial.allocationFailure = admission.allocationFailure;
     denial.pending = denial.pending || transferPending(admission);
+    if constexpr (std::is_same_v<Admission, TokenAdmission>) {
+      denial.pages = admission.additionalPages;
+      denial.form = admission.form;
+    }
     // Memory on its way back ends the shortage without the residents.
     if (memoryDenied(admission) && !denial.pending && !optional)
       allocationFailed_ = true;
@@ -2078,15 +2123,21 @@ CacheReclaimResult Engine::reclaimForState(ReclaimClass upTo, bool forLater) {
 }
 
 // The reclaim step for KV pages the engine's limit refused. Allocated extents
-// stay for the pages to reuse; idle state memory goes first, then the cache
-// gives up what covers the shortfall, of the pages' form, in one step.
+// stay for the pages to reuse; idle state memory beyond the lane's pooled
+// buffers goes first, then the cache gives up what covers the shortfall, of
+// the pages' form, in one step, and the lane's buffers go last. Their draft
+// ring is the one buffer no cached state holds: while it stays, a request
+// that waits can start beside this one from cached states' cells and windows.
 CacheReclaimResult Engine::reclaimForKv(const TokenAdmission &admission, ReclaimClass upTo) {
-  if (reclaimIdleState(false, model::IdleMemory::BuffersThenCaches))
+  if (reclaimIdleState(true, model::IdleMemory::BuffersThenCaches))
     return {true, 0};
   const CacheReclaimResult reclaimed = cache_.reclaimForPages(
       admission.additionalPages, CacheReclaimMode::KeepExtents, upTo, admission.form);
   if (reclaimed.madeProgress)
     signalResourceProgress();
+  if (!reclaimed.madeProgress && !reclaimed.pending &&
+      reclaimIdleState(false, model::IdleMemory::Buffers))
+    return {true, 0};
   return reclaimed;
 }
 
@@ -2433,7 +2484,8 @@ void Engine::apply(const Pending &command, std::span<const ModelStepResult> resu
   scheduler_.complete(plan, schedulerResults, wallMilliseconds,
                       ticket.prefillTimingIsRepresentative(), ticket.hostMilliseconds(),
                       command.streamed ? std::optional(ticket.streamMilliseconds())
-                                       : std::nullopt);
+                                       : std::nullopt,
+                      ticket.imageEncodeMilliseconds());
   if (plan.passes > 1 && plan.pass + 1 == plan.passes)
     request(plan.items.front().requestId).passCommand.reset();
   events_.batchCompleted(plan.kind, plan.width(), inputTokens, outputTokens,
@@ -2488,6 +2540,10 @@ Engine::LaneEnd Engine::capacityExhausted(std::string_view what,
                         metal::allocationFailureName(failure);
   if (!detail.empty())
     message += " (" + std::string(detail) + ")";
+  // A lone lane judge failed: only other limits fit it.
+  message += "; the request does not fit in the memory this server may use, even after "
+             "every cached prefix was evicted: restart the server with a larger "
+             "--max-memory or a smaller --max-context";
   return {LaneOutcome::CapacityExhausted, std::move(message)};
 }
 

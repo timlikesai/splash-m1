@@ -422,6 +422,8 @@ class _StartupAttempt:
     event: threading.Event = field(default_factory=threading.Event)
     generation: int | None = None
     error: EngineRuntimeError | None = None
+    # The engine before, while the attempt waits for it to exit.
+    stopping: ProcessLike | None = None
 
 
 class MultiplexedRuntime:
@@ -845,7 +847,15 @@ class MultiplexedRuntime:
                 return
             generation = attempt.generation
             if generation is None:
-                attempt.error = error
+                stopping = attempt.stopping
+                attempt.error = (
+                    EngineUnhealthy(
+                        f"previous native engine (pid {stopping.pid}) has not "
+                        "exited; not launching a second engine beside it"
+                    )
+                    if stopping is not None
+                    else error
+                )
                 attempt.event.set()
                 return
         # The engine's failure ends the attempt.
@@ -868,11 +878,26 @@ class MultiplexedRuntime:
         old_reader: threading.Thread | None,
     ) -> None:
         if old_process is not None:
-            self._stop_process(old_process, old_reader)
+            # A new engine loaded beside the old one holds two models at once,
+            # which on a Mac sized for one exhausts memory: it spawns once the
+            # old one has exited. One that has not by the attempt's deadline
+            # stays the engine the next attempt waits for.
+            with self._state_lock:
+                attempt.stopping = old_process
+            if not self._stop_process(old_process, old_reader, attempt.deadline):
+                return
+            with self._state_lock:
+                attempt.stopping = None
         with self._state_lock:
-            # close() or a newer attempt may have won while the old engine was
-            # being stopped; spawning now would orphan a fresh engine.
-            if self._closed or self._startup_attempt is not attempt:
+            # close(), a newer attempt or the attempt's deadline may have won
+            # while the old engine was being stopped; spawning now would
+            # orphan a fresh engine.
+            if (
+                self._closed
+                or self._startup_attempt is not attempt
+                or attempt.event.is_set()
+                or time.monotonic() >= attempt.deadline
+            ):
                 return
 
         process = None
@@ -1193,7 +1218,12 @@ class MultiplexedRuntime:
         with self._state_lock:
             if generation != self._generation or self._terminal_error is not None:
                 return
-            if self._ready_message is None:
+            # Before its ReadyEvent an engine sends nothing but why its start
+            # failed (runtime/main.mm reportStartFailure).
+            if self._ready_message is None and not (
+                isinstance(message, wire.ErrorEvent)
+                and message.failure_class is wire.FailureClass.ENGINE_UNHEALTHY
+            ):
                 raise ProtocolFatal("native event arrived before ReadyEvent")
 
         if isinstance(message, wire.StatusJsonEvent):
@@ -1462,7 +1492,13 @@ class MultiplexedRuntime:
         self,
         process: ProcessLike,
         reader: threading.Thread | None,
-    ) -> None:
+        deadline: float | None = None,
+    ) -> bool:
+        """Whether `process` exits by `deadline` (time.monotonic()): asked
+        with SIGTERM, killed past the shutdown grace, then waited for, without
+        a deadline a shutdown grace more. A killed engine can take long to
+        exit while it gives its memory back, and neither the next engine nor
+        the server's exit should run beside it."""
         try:
             if process.stdin is not None:
                 process.stdin.close()
@@ -1473,17 +1509,35 @@ class MultiplexedRuntime:
                 process.terminate()
             except OSError:
                 pass
-        # Bound the child's exit time before escalating to SIGKILL.
-        try:
-            process.wait(timeout=self._shutdown_grace_seconds)
-        except (OSError, subprocess.TimeoutExpired, TimeoutError):
+        grace = time.monotonic() + self._shutdown_grace_seconds
+        exited = self._wait_exit(
+            process, grace if deadline is None else min(grace, deadline)
+        )
+        if not exited:
             try:
                 process.kill()
             except OSError:
                 pass
-            try:
-                process.wait(timeout=1.0)
-            except (OSError, subprocess.TimeoutExpired, TimeoutError):
-                pass
+            exited = self._wait_exit(
+                process,
+                time.monotonic() + self._shutdown_grace_seconds
+                if deadline is None
+                else deadline,
+            )
         if reader and reader is not threading.current_thread():
             reader.join(timeout=1.0)
+        return exited
+
+    @staticmethod
+    def _wait_exit(process: ProcessLike, deadline: float) -> bool:
+        """Whether `process` exits by `deadline` (time.monotonic())."""
+        while True:
+            try:
+                process.wait(timeout=max(0.0, deadline - time.monotonic()))
+                return True
+            except (subprocess.TimeoutExpired, TimeoutError):
+                if time.monotonic() >= deadline:
+                    return False
+            except OSError:
+                # Reaped already: nothing is left to wait for.
+                return True
