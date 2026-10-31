@@ -100,7 +100,7 @@ are one-lane decode numbers on the 27B's shapes unless stated.
 | Split count / threadgroups per core | fitted tiers of 24 threadgroups per core (staged) and 24 with a 256-input floor (register), from an M1 Max and an M2 Max | whether a fitted occupancy law, as Apple10 now has, beats a tier across 7 to 76 cores |
 | Attention tile | the MPP tensor path holds most of a long-context prefill chunk or verify cycle, which is why the register tile exists; the end-to-end it enabled is measured (27B on an M1 Max: cold 8K prefill 135 tok/s, 1.5K append 121) | the 128-dimension, window and sinks geometries have no register kernels, so a model that uses them runs the slow path here |
 | Prefill command length | bounded to about 5 s so macOS does not abort it | the right bound per machine class, and whether the attention piece-work bound (2^25 row-history pairs) is what actually protects the display |
-| MoE experts | MMA expert tiles, one gate/up pass | the ANE's share of an MoE layer; the shared expert is dense-shaped and always visited, the routed ones are not |
+| MoE experts | the routed passes' MPP `matmul2d` replaced by simdgroup MMA (`moe_expert_gguf_mma_m*`), which is what Apple7/8 run for a one-slice shared expert; a two-slice routing still lands on the MPP kernels, because the MMA ones were never compiled for it | the ANE's share of an MoE layer; the shared expert is dense-shaped and always visited, the routed ones are not |
 | Coefficient chains | the span chain measured 2.4-2.8% at one lane | its form under the new per-coefficient-group chains, which is why it is off |
 
 ## Taken
@@ -200,6 +200,18 @@ but the choice was measured on M5 hardware. `benchmark-gguf-projection` with
 Max-class GPU would not abort a long prefill. A 76-core Ultra and an 8-core base
 M1 want different numbers, and the wrong one costs throughput (too small) or a
 wedged GPU (too large).
+
+**9. Compile the two-slice MoE MMA kernels.** Listed last because it was found
+last, not because it ranks there: it is the cheapest item on this list.
+`moeGgufTile` sends Apple7/8 to the MMA expert tile only when the shared expert
+is one slice, and to `MoeGgufTile::Staged` otherwise — which on these
+generations is the MPP `matmul2d` this file's first rule says to avoid. Qwen3
+Next-class routings, two-slice shared experts, therefore decode on the slow
+path, and `gguf-moe-sigmoid` (which exercises `_s2`) covers the routing kernels
+but not expert tiles that do not exist. The work is the `_s2` instantiations of
+`moe_expert_gguf_mma_m*` and their numerics in the same test, then flipping the
+`sharedSlices == 1` condition away. *Decides:* whether a two-slice MoE on an M1
+or M2 runs its experts on tensor hardware at all.
 
 ## Things deliberately not to chase
 
