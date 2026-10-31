@@ -96,7 +96,8 @@ PAGED_VERIFY_SPLIT(verify_attention_bf16_split_kv4_g8_d128_w512, 4, 8, 128, 512,
       uint lane [[thread_index_in_simdgroup]]) {                               \
     threadgroup uint query_stage[Group * 32 * 32];                             \
     const SplashAttentionTile tile =                                           \
-        splash_verify_attention_tile<Heads, Group>(params[group.z], group.x,   \
+        splash_verify_attention_tile<Heads, Group, 256>(params[group.z],       \
+                                                        group.x,               \
                                                    group.z);                   \
     if (!tile.active || group.y >= tile.splits || sg >= Group)                 \
       return;                                                                  \

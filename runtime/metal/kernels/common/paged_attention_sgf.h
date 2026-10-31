@@ -147,7 +147,7 @@ __attribute__((always_inline)) inline void tile(
   constexpr uint Rows = 8;
   constexpr uint M = Rows * G;
   constexpr uint N = SplashKvPageTokens;
-  constexpr uint D = SplashKvHeadDimension;
+  constexpr uint D = SPLASH_KV_HEAD_DIMENSION;
   static_assert(N == 32 && D == 256, "fragment maps assume Page32 and D = 256");
   static_assert(SPLASH_TARGET_VERIFY_ROWS == Rows &&
                     SPLASH_PREFILL_ATTENTION_TILE_ROWS == Rows,
@@ -191,7 +191,7 @@ __attribute__((always_inline)) inline void tile(
   float2 row_max(-INFINITY), row_sum(0.0f);
   // The four tokens of this lane's score rows: base + {0, 1, 4, 5}.
   const uint scale_base = page_token(fm, 0);
-  const SplashKvAddressing<KVHeads, CacheElement> addressing(kv, kv_head);
+  const SplashKvAddressing<KVHeads, SPLASH_KV_HEAD_DIMENSION, CacheElement> addressing(kv, kv_head);
 
   for (uint page = page_begin; page < page_end; ++page) {
     const SplashKvPageTensors<CacheElement> tensors = addressing.page(page_table[page]);

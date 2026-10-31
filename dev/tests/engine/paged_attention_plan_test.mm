@@ -572,13 +572,13 @@ std::vector<uint16_t> run(metal::MetalBackend &backend, Case &data, bool testBou
   constexpr bool prefill = phase == Phase::Prefill;
   const auto plan = [&] {
     if constexpr (prefill)
-      return ops::PagedAttention::prefillPlan(data.rows, data.queryHeads, data.layout, deviceTile(backend));
+      return ops::PagedAttention::prefillPlan(data.rows, data.queryHeads, data.layout, {}, deviceTile(backend));
     else {
       std::vector<uint32_t> histories;
       for (uint32_t lane = 0; lane < data.lanes; ++lane)
         histories.push_back(data.stores[lane].committed_tokens);
       return ops::PagedAttention::verifyPlan(data.lanes, data.queryHeads, data.layout,
-                                            histories, deviceTile(backend));
+                                            histories, {}, deviceTile(backend));
     }
   }();
   constexpr uint64_t guardBytes = 256;

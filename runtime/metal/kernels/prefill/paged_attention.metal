@@ -112,7 +112,7 @@ PAGED_PREFILL_SPLIT(prefill_attention_bf16_split_kv4_g8_d128_w512, 4, 8, 128, 51
       uint sg [[simdgroup_index_in_threadgroup]],                              \
       uint lane [[thread_index_in_simdgroup]]) {                               \
     threadgroup uint query_stage[Group * 32 * 32];                             \
-    constexpr uint D = SplashKvHeadDimension;                                  \
+    constexpr uint D = SPLASH_KV_HEAD_DIMENSION;                              \
     const uint kv_head = group.x, tile = group.y, split = group.z;             \
     const uint tile_start = tile * SplashPrefillTileRows;                      \
     if (!splash_prefill_attention_contract_valid(params) ||                    \

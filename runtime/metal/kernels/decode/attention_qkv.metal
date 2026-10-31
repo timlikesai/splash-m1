@@ -172,7 +172,7 @@ ATTENTION_GATE_TABLE(verify_attention_gate_table16f_kv2_g16, 32, 2, 256, gguf_sg
   kernel void Name( \
       device const bfloat *attention [[buffer(0)]], \
       device bfloat *hidden [[buffer(1)]], \
-      device bfloat *table [[buffer(2)]], device float *sums [[buffer(3)]], \
+      device Layout::Elem *table [[buffer(2)]], device float *sums [[buffer(3)]], \
       uint index [[thread_position_in_grid]], \
       uint lane [[thread_index_in_simdgroup]]) { \
     constexpr uint width = QHeads * HeadDim; \
