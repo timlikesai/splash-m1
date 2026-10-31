@@ -5,9 +5,9 @@
 > This is a community port, not an official Inco release.
 >
 > - **M1/M2:** prebuilt releases on [the releases page](https://github.com/paperniuk/splash/releases);
->   source in branch [`apple7-m1-1.4`](https://github.com/paperniuk/splash/tree/apple7-m1-1.4)
->   (upstream 1.4.0 plus the M1/M2 commits).
-> - **On M1/M2 this build runs** the models upstream 1.4.0 loads (GGUF, including Prism ML's Ternary
+>   source in branch [`apple7-m1-1.5`](https://github.com/paperniuk/splash/tree/apple7-m1-1.5)
+>   (upstream 1.5.0 plus the M1/M2 commits).
+> - **On M1/M2 this build runs** the models upstream 1.5.0 loads (GGUF, including Prism ML's Ternary
 >   Bonsai `PQ2_0` and Qwen3.8-Flash-Next, and MLX checkpoints) on its own kernels, the vision
 >   encoder included. Flash-Next `Q2_0` runs on a 64 GB Mac, about 47 tok/s on an M1 Max.
 > - **Neural Engine prefill** runs on M1/M2 too: the 27B processes long prompts about 1.5x faster
