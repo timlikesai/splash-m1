@@ -20,7 +20,8 @@ kernel void moe_expert_gguf_mma(device bfloat *input [[buffer(0)]], device const
   threadgroup half2 tl[kQuantPairTableEntries];
   if (group.y >= *tile_count) return;
   const MoeTileDescriptor tile = tiles[group.y];
-  const MoeGgufSegment s = moe_gguf_segment(tile.expert, p, slots, w0, w1, meta, sw0, sw1, smeta);
+  // One shared slice: these kernels are compiled for that routing only (moeGgufTile).
+  const MoeGgufSegment s = moe_gguf_segment<1>(tile.expert, p, slots, w0, w1, meta, sw0, sw1, smeta);
   device bfloat *x = input + ulong(group.y) * Rows * p.input_size;
   const ulong out = ulong(group.y) * Rows * p.output_size;
   const uint origin = group.x * GGUF_TILE_COLUMNS + simd_group * kColumns, thread_index = simd_group * 32 + simd_lane;
