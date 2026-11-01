@@ -437,8 +437,11 @@ $(TEST_VISION_ATTENTION_TEST): dev/tests/engine/vision_attention_metal_test.mm \
 $(TEST_Q8_METAL_TEST): dev/tests/engine/q8_paged_kv_metal_test.mm
 $(TEST_Q8_STORAGE_TEST): dev/tests/engine/q8_page_storage_test.mm \
 		$(ENGINE_LIBRARY)
+# The test's spin check reads the host-step library beside the test (TEST_HOST_STEP_LIB),
+# which the full recipe builds but a per-test build (dev/tests/run-metal.sh) does not;
+# without it the spin check fails where no full suite has left the file behind.
 $(TEST_METAL_BACKEND_TEST): dev/tests/engine/metal_backend_test.mm \
-		$(ENGINE_INSTRUMENTED_METAL_OBJECT) $(ENGINE_LIBRARY)
+		$(ENGINE_INSTRUMENTED_METAL_OBJECT) $(ENGINE_LIBRARY) $(TEST_HOST_STEP_LIB)
 $(TEST_HANDOFF_TEST): dev/tests/engine/handoff_test.mm $(ENGINE_LIBRARY)
 $(TEST_VISION_ENCODER_TEST): dev/tests/engine/vision_encoder_test.mm \
 		$(ENGINE_LIBRARY)
