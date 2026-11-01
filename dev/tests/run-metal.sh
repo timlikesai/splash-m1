@@ -28,11 +28,40 @@ pattern="$1"
 skip="${SKIP_METAL:-}"
 ran=0
 failed=0
+device=""
 if xcrun --sdk macosx cc -framework Metal -framework Foundation -o /tmp/splash-device-info \
      dev/tests/device-info.m 2>/tmp/splash-device-info.err; then
-  echo "== $(/tmp/splash-device-info)"
+  device="$(/tmp/splash-device-info)"
+  echo "== $device"
 else
   echo "== device-info did not build: $(tail -1 /tmp/splash-device-info.err)"
+fi
+# The runtime's own support minimum is Apple GPU family 7 (DeviceCapabilities'
+# kMinimumAppleGpuFamily: "M1 or later"), and the port's kernels follow it -- the
+# simdgroup MMA and register tiles are written for that hardware and will not even
+# compile below it. GitHub's macos-26 pool has handed out at least two GPUs: an
+# M1-class one that runs this suite green, and an "Apple Paravirtual" one that
+# claims nothing above Apple5 and fails gguf-projection with
+# "unable to create Metal pipeline gguf_decode_mma_fused_m64: Compilation failed".
+# A test run on a device the product does not support measures nothing, so say so
+# and stop, rather than reporting the branch as broken on a runner it happens to
+# have drawn. SKIP_DEVICE=0 overrides, for a machine where the probe is wrong.
+# Skip only on a device the probe *read* and found below the minimum. If the probe
+# did not build, or named no family, run the tests anyway: a silent green with zero
+# coverage is worse than a red that can be read.
+highest=0
+claims=0
+for claim in $device; do
+  case "$claim" in
+    Apple*) n=${claim#Apple}
+      case "$n" in (*[!0-9]*|'') ;; (*) claims=$((claims + 1)); [ "$n" -gt "$highest" ] && highest=$n ;; esac ;;
+  esac
+done
+if [ "$claims" -gt 0 ] && [ "$highest" -lt 7 ] && [ "${SKIP_DEVICE:-1}" = "1" ]; then
+  echo "== SKIPPED: this device claims no Apple GPU family 7 or newer (highest: $highest),"
+  echo "   below the runtime's minimum (M1 or later). The Metal tests are not applicable here;"
+  echo "   they are not a branch regression. Run them on M1 or later, or set SKIP_DEVICE=0."
+  exit 0
 fi
 while IFS= read -r command; do
   name=$(printf '%s' "$command" | grep -oE "engine-tests/[a-z0-9._-]+" | head -1 | sed 's|.*/||; s|\.[a-z]*$||')
