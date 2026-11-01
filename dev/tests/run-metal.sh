@@ -61,6 +61,12 @@ if [ "$claims" -gt 0 ] && [ "$highest" -lt 7 ] && [ "${SKIP_DEVICE:-1}" = "1" ];
   echo "== SKIPPED: this device claims no Apple GPU family 7 or newer (highest: $highest),"
   echo "   below the runtime's minimum (M1 or later). The Metal tests are not applicable here;"
   echo "   they are not a branch regression. Run them on M1 or later, or set SKIP_DEVICE=0."
+  # A green job that ran nothing must not look like coverage. On CI this becomes a
+  # warning annotation on the run, so "skipped for the device" is visible without
+  # failing a branch that is fine -- the pool hands out both kinds of runner.
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    echo "::warning title=Metal suite skipped for the device::no Metal tests ran: this runner's GPU claims no Apple family 7 or newer (${device:-probe unread}); the port's kernels cannot compile there."
+  fi
   exit 0
 fi
 while IFS= read -r command; do
