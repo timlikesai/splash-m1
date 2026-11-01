@@ -30,3 +30,7 @@ lowbit-q5k-12288x5120	build/engine-tests/gguf-projection-benchmark build/splash.
 prefill-tiles-q4k-17408x5120	build/engine-tests/gguf-projection-benchmark build/splash.metallib q4k 17408 5120 none 10 prefill=33,64,256
 float-router-f32	build/engine-tests/gguf-projection-benchmark build/splash.metallib float-f32 256 2048 none 25
 mlx-vocab-af4g64	build/engine-tests/gguf-projection-benchmark build/splash.metallib af4g64 248320 5120 none 8
+threshold-af4g64-8192x2048	build/engine-tests/gguf-projection-benchmark build/splash.metallib af4g64 8192 2048 none 25
+threshold-af4g64-6144x2048	build/engine-tests/gguf-projection-benchmark build/splash.metallib af4g64 6144 2048 none 25
+threshold-af4g64-4096x4096	build/engine-tests/gguf-projection-benchmark build/splash.metallib af4g64 4096 4096 none 25
+threshold-af4g64-2048x2048	build/engine-tests/gguf-projection-benchmark build/splash.metallib af4g64 2048 2048 none 25
