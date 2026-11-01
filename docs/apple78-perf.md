@@ -277,17 +277,26 @@ since plenty of 256-dim-capable architectures window.
 **6. Re-derive the span chain.** Worth 2.4-2.8% at one lane, 0.7-1.6% at two to
 four. Blocked on the chain restructure, not on measurement.
 
-**7. The 64-row prefill tile, answered for the tile that is offered.** The
-harness's `prefill-tiles-q4k-17408x5120` sweep at R33 and R64 on the M2 Max:
-the policy's `prefill128` takes 1.700 and 1.703 ms against every staged
-candidate it was offered (4.71 to 5.17 ms) -- 2.8x, and the near-identical
-times for 33 and 64 rows are the 128-row tile padding both to one height. So
-keeping Apple7/8 on the prefill tile is right, and upstream's Apple10
-exception (`LinearGguf.cpp`: staged only to `kMaximumDecodeTileRows` unless
-`family_ == Apple10`) should not be copied here. What the sweep cannot say is
-how a *64-row* staged tile would do, because the benchmark never builds one on
-this family -- the candidates are decode-shaped splits. That is a five-line
-tool change, and only then a measurement.
+**7. The 64-row staged prefill tile is measured here, and it loses.** First
+stated below as "the benchmark never offers it", which was wrong: the sweep
+already does (`dev/benchmarks/gguf_projection_benchmark.mm`, "Chunks of up to
+`kMaximumStagedPrefillRows` rows also on the staged 64-row tile, at every
+split"), `stagedTileRows(64)` is 64, and the Apple7/8 MMA kernels carry a 64-row
+instance (`GGUF_DECODE_MMA_ROWS64`, added by this port). So the harness's
+`prefill-tiles-q4k-17408x5120` rows at R33 and R64 *are* that comparison: the
+policy's `prefill128` takes 1.700 and 1.703 ms, the 64-row staged tile 4.71 to
+5.17 ms at every split -- **2.8x slower** -- and 33 and 64 rows costing the same
+is the 128-row tile padding both to one height.
+
+Which makes the interesting half of the question the other way round. Upstream's
+comment says the 64-row staged tile beats the prefill tile by 6-43% on Apple10,
+and the policy here keeps Apple7/8 on the prefill tile
+(`LinearGguf.cpp`: staged only to `kMaximumDecodeTileRows` unless
+`family_ == Apple10`); that division now has a number behind it on this hardware
+rather than being an unexamined inheritance. Nothing further to measure at 33 or
+64 rows; if the Ultra's baseline sweep (`#2`) shows the gap closing at 64 cores,
+that is worth reopening, and it will show up by itself because the sweep covers
+the same candidates.
 
 **8. Retune the display-facing bounds per machine.**
 `kDefaultPrefillCommandMilliseconds` (2000 ms, `runtime/engine/Scheduler.hpp`)
