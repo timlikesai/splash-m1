@@ -168,7 +168,11 @@ are one-lane decode numbers on the 27B's shapes unless stated.
   activation table costs) and for cheaper dequantization on the MMA tile, not
   for shaving bits off the weights. At four lanes the two packages converge
   (323 against 324 tok/s), where the per-token weight traffic that does
-  differentiate them is amortized across the batch.
+  differentiate them is amortized across the batch. The advice is scoped to
+  this machine and this context (30 cores, 4096 tokens): on the 60-core M2
+  Ultra the ordering of a GGUF-against-MLX pair reverses (below), and the two
+  measurements ran different quantizations, so the strict cross-check is the
+  same two packages on both chips.
 - **Streaming the routed experts is a last resort, and the numbers say so.**
   With every expert resident (17.3 GB of them) the 35B refuses to start past a
   4096-token context on 32 GB -- "unable to allocate a lane's state: host memory
@@ -185,6 +189,28 @@ are one-lane decode numbers on the 27B's shapes unless stated.
   doing more, it is waiting: which is worth knowing before anyone recommends a
   35B MoE on an 8 GB machine, and worth re-measuring on family 7, where both
   the GPU and the SSD controller are a generation older.
+- **The same model at 60 cores and 64 GB (the M2 Ultra).** Three findings,
+  the same commit. First, the ceiling the 32 GB M2 Max hit at 4096 tokens is
+  a memory problem, not a model problem: on 64 GB every context from 8K to
+  64K starts with every expert resident (18.77 GB of them in the GGUF
+  UD-Q4_K_XL package, 32.64 GB in the MLX 8-bit one), and the model's full
+  256K native window starts too, via `serve-native` at 128K and 262K. Second,
+  streaming is worse in proportion, not different in kind: `decode-profile` at
+  `--expert-memory 64G` against `2G` takes the fused commands 7.9x (GGUF
+  prefill) to 19.8x (MLX prefill) and 4.3-16x on the decode cycles, against
+  1.6-3.3x of attributed dispatch work, and `moe_expert_load` is 56.9% of the
+  GPU time in the starved MLX prefill (0.0-6.5% of it when the experts are
+  resident) — the same stall-not-arithmetic the M2 Max found, wider, with the
+  8-bit package streaming worse in proportion than the 4-bit one (double the
+  bytes, double the SSD work per token). Third, the package ordering
+  reverses: with experts resident, the GGUF package is the faster one at every
+  width and context (16K-64K) — 0.8% at one lane, 7.1% at four (458 against
+  495 ms), and 2.1% on a cold 4k prefill (7413 against 7573 ms) — against
+  the M2 Max's 16% for MLX at 4096 tokens. The caveat is the quantizations:
+  Q3_K_XL against 4-bit on the M2 Max, Q4_K_XL against 8-bit on the M2 Ultra,
+  so the reversal is the shape, not the level; the strict cross-check is the
+  same two packages on both chips, and the package advice is scoped to
+  machine and context until it runs.
 
 ## Ranked opportunities
 
