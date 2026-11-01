@@ -192,16 +192,35 @@ parts can be measured on hosted CI runners, which are this GPU class.
 *Decides:* whether a law beats the tier, and by how much at each end of the
 range.
 
-**2. Try fp16 activations on the native half MMA path.** The single structural
-idea. Apple7/8 do have fast 8x8 half×half simdgroup MMAs; what they lack is
-bfloat. Today's tiles pair half weights with *fp32* activations because fp32 is
-exact, which costs both ALU work and a table of twice the bytes. Pairing half
-weights with half activations instead keeps every product exact only when the
-activation survives half's 11-bit mantissa — so it is a numerics question, and
-the repo already has the machinery to answer it per format: the fp64-referenced
-slack bounds in `dev/tuning/LinearNumerics.hpp` and the per-format numerics
-tests. *Decides:* per format, whether outputs stay inside the slack the tests
-allow, and what the projections and end-to-end decode do about it.
+**2. Try fp16 activations on the native half MMA path — smaller than it looks,
+now measured.** Apple7/8 do have fast 8x8 half×half simdgroup MMAs; what they
+lack is bfloat. Today's tiles pair half weights with *fp32* activations
+(`gguf_mma_tile.h`: "every product is exact and only the fp32 accumulation
+rounds, and activations past half's range stay finite"). The precision half of
+that argument is softer than it reads: bf16 has an 8-bit mantissa, which fits
+fp16's 11-bit exactly, so a bf16 activation cast to half loses nothing in
+significand — the real reason for fp32 is **range**, fp16's 65504 ceiling and
+its subnormal floor below 6.1e-5, plus the bitwise story `table16f` exists to
+give.
+
+What the change could win is now bounded by a measurement rather than by
+guesswork: `decode-profile` on the 27B MLX package, one-lane decode cycle,
+attributed by kernel --
+
+| Part of the cycle | Share |
+| --- | --- |
+| `gguf_decode_sgf_af4g64_l1_{a,r,g}` (the projections themselves) | 84.3% |
+| `…_a_f32` (the fp32-output projection) | 7.0% |
+| everything writing fp32 tables (`norm_rms_table16f_decode` 2.6, `verify_gdn_fused_table16f` 2.8, `decode_linear_gguf_prepare_f` 0.5, `verify_attention_gate_table16f` 0.1) | **6.0%** |
+
+Half the table bytes is the whole prize on the store side, and the tiles read
+activations of `rows × K × 4` bytes against `K × N × bits` of weights -- at one
+lane 164 KB against 44 MB, so the load side is noise. Realistically this is a
+2-4% decode change for a per-format numerics re-derivation through the
+fp64-referenced slack bounds in `dev/tests/engine/LinearNumerics.hpp`, and it
+would give up the exactness argument that makes Apple7/8's outputs defensible.
+*Decides:* whether 2-4% is worth re-opening the numerics story; the sizing says
+pursue it only after items 1, 7 and 9.
 
 **3. ~~Give the ANE a fair share on these GPUs.~~ Closed** — see Taken. The
 calibration's own choice beats a fixed share by 7 points of prefill time, so

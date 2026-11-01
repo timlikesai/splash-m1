@@ -22,7 +22,7 @@ same tiles with exact half weights and fp32 activations (the `F32` instances,
 only the fp32 accumulation order differs, so outputs match the shipped tiles
 up to summation order and never bitwise. Numerics tests therefore compare
 against fp64 references with a slack bound instead of demanding equality
-(`dev/tuning/LinearNumerics.hpp`).
+(`dev/tests/engine/LinearNumerics.hpp`).
 
 **MPP `matmul2d` runs far below the simdgroup MMA rate.** The staged tiles and
 the MPP attention tile use the tensor-operation path, which on an M1 Max
