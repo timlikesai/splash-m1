@@ -15,8 +15,10 @@ Rules that keep results comparable:
   served model measures both of them badly.
 - Record the machine with the numbers: GPU family, core count, macOS, memory,
   and the build's identity. The same kernel policy means different things on a
-  10-core M2 and a 76-core M2 Ultra, and `tune_kernels` and
-  `gguf-projection-benchmark` both print family and core count in their heading.
+  10-core M2 and a 64-core M2 Ultra, and `gguf-projection-benchmark`,
+  `gguf-moe-benchmark` and `dev/tests/device-info.m` all print what the machine
+  is: family, core count, the families Metal claims, and whether it offers
+  residency sets.
 - Median, not best. `gguf-projection-benchmark` reports a median over its
   weight copies; `attention-sweep` and the MoE benchmark do the same. Keep the
   rounds the tool asks for, and do not compare across different round counts.
