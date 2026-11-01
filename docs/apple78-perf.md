@@ -107,19 +107,28 @@ are one-lane decode numbers on the 27B's shapes unless stated.
 
 ## Taken
 
-- **A four-lane step of the 64-input-group affine weights stages on the MMA
-  kernels** (d9d77ed0). Found by the harness's first baseline: at one to three
-  lanes the register tile wins by 6-40%, at four it loses by 6.7-12.8%, and
-  Q4_K/IQ4_XS keep the register tile at every width, so the rule is the
-  coefficient's 64-input span rather than the row count. Three of 55 sweep
-  cases moved, none regressed. The vocabulary projection — the single largest
-  decode cost of a turn — gains 12.8%. End to end on the 27B-4bit itself
-  (`backend-benchmark --scenario decode --ane-ffn-share 0`, three samples, both
-  builds run twice interleaved from a separate worktree at e43c18e2): a batch of
-  four decodes **5.7% faster** (347.5 → 327.7 ms per cycle) and its 64-token
-  throughput 4.7% faster, while one, two and three lanes move by 0.1% or less
-  and prefill not at all — which is the change's signature, since only
-  four-lane plans were touched. Repeat runs agreed to 0.3%.
+- **A four-lane step of the large 64-input-group affine projections stages on
+  the MMA kernels** (d9d77ed0, refined in bf1198d5). Found by the harness's
+  first baseline: at one to three lanes the register tile wins by 6-40%, at four
+  it loses by 6.7-12.8%, and Q4_K/IQ4_XS keep the register tile at every width.
+  Three of 55 sweep cases moved, none regressed, and on the 27B-4bit end to end
+  a batch of four decoded **5.7% faster** (347.5 → 327.7 ms per cycle) with one
+  to three lanes unmoved -- the signature of a change that touches only
+  four-lane plans.
+
+  The first version of the rule was too wide, and the 35B MoE caught it: with no
+  size condition it *cost* that model time on its small projections (-5.9% on
+  the o at 2048x4096) and its four-lane cycle measured +0.4%, no gain at all,
+  because the loss cancelled the vocabulary's +13.1%. Measured across thirteen
+  shapes, the sign at four lanes follows **N x K** -- the weights' element count,
+  not their bytes, since 2-, 4- and 8-bit versions of a shape land within a point
+  of each other -- and splits cleanly at 1<<24 elements: above it staging wins
+  (+1.1% at 2048x8192 up to +13.1% on the vocabulary), below it loses (-0.6% at
+  4096x2048 to -15.3% at 2048x2048). With that floor the MoE model's four-lane
+  cycle drops **4.5%** (85.37 → 81.51 ms) and the 27B's **5.9%** (347.32 →
+  326.88 ms), reproduced against a pre-change worktree, runs interleaved, three
+  samples each. The lesson is in the rule's comment: a policy fitted on one
+  model's shape list is a guess about every other model's.
 
 - **Two-slice MoE routings run their experts on tensor hardware now.** The MMA
   expert kernels existed only for a one-slice shared expert, so Flint-class
@@ -257,9 +266,12 @@ between, so their targets take the register tile (`prefill_attention_q8_split_sg
 target. **The draft does not escape:** the shared DFlash2 draft is
 `head_dim: 128` with `sliding_window: 2048`, so its attention is
 `draft_attention_bf16_split` — the MPP one — on every decode cycle of every
-model this fork serves. In the B1 profile that is 0.671 ms of a 97.26 ms cycle,
-**0.7%**, and the draft's own 2048-token window bounds it: it does not grow with
-context, and there is no draft attention in the prefill section at all.
+model this fork serves. In the B1 profile at a 512-token context that is 0.671 ms
+of a 99.77 ms cycle, **0.67%**; at 16384 tokens it is 1.566 ms of 109.13 ms,
+**1.43%** -- the draft's 2048-token window limits it but does not make it
+constant, and its share then *falls* with batch (1.09% at four lanes) because
+everything else grows faster. For scale, the target's own attention on the
+register tile is 10.3-11.3% of the cycle at 16K.
 
 Two corrections to how I first framed this. Register pressure goes the *other*
 way from what I assumed — 128 is half of 256, so a 128-dim tile is cheaper in
@@ -268,7 +280,7 @@ motivation was upstream's 128-dim sinks-and-window *target* class, which remains
 a real risk for a model of that shape (there the fallback applies to full
 attention, whose cost does grow with context) but is not what is installed here.
 
-So: ~0.5% is the prize on this draft today, which is not worth the
+So: ~1.4% of a long-context one-lane cycle is the prize on this draft, not worth the
 parameterization; the trigger to revisit is a *target* model with 128-dim heads
 or a sliding window, and `dev/benchmarks/attention_sweep.mm` measures that in
 minutes the day one appears. Window support is the more general gap of the two,
