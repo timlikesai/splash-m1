@@ -20,7 +20,9 @@ static NSString *familyName(MTLGPUFamily family) {
     case MTLGPUFamilyApple8: return @"Apple8";
     case MTLGPUFamilyApple9: return @"Apple9";
     case MTLGPUFamilyApple10: return @"Apple10";
+#if defined(MTLGPUFamilyApple11)
     case MTLGPUFamilyApple11: return @"Apple11";
+#endif
     case MTLGPUFamilyMetal4: return @"Metal4";
     default: return @"?";
   }
@@ -33,8 +35,13 @@ int main(void) {
       fprintf(stdout, "Metal: no device\n");
       return 1;
     }
+    // Up through the newest family the current SDK names: the runtime answers
+    // supportsFamily: for families a given SDK does not yet spell, so an SDK
+    // without MTLGPUFamilyApple11 (macOS 26.5 and earlier) still builds and
+    // asks the question. A probe that only builds one way is a probe that
+    // gets edited out of a log the next time someone needs it.
     NSMutableString *families = [NSMutableString string];
-    for (MTLGPUFamily family = MTLGPUFamilyApple3; family <= MTLGPUFamilyApple11; ++family)
+    for (MTLGPUFamily family = MTLGPUFamilyApple3; family <= (MTLGPUFamily)1011; ++family)
       if ([device supportsFamily:family])
         [families appendFormat:@"%s ", familyName(family).UTF8String];
     // The two things this branch's code asks about outside the family list.
