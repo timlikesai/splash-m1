@@ -245,3 +245,14 @@ release-check: preflight
 		git status --short >&2; \
 		exit 1; \
 	}
+
+# Apple7/8 port checks (docs/apple78-port.md). Deliberately separate targets
+# rather than additions to check-source: this branch's work should not edit an
+# upstream recipe, so the next merge sees nothing here at all.
+.PHONY: apple78-check-docs apple78-check-rebase-surface
+
+apple78-check-docs:
+	@python3 dev/tools/apple78-doc-check.py
+
+apple78-check-rebase-surface:
+	@python3 dev/tools/apple78-rebase-audit.py --upstream $${UPSTREAM:-incoai/main} | head -12

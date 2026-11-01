@@ -49,6 +49,11 @@ jobs:
         run: HOMEBREW_NO_AUTO_UPDATE=1 brew install python@3.13
       - name: Build production and run CPU runtime checks
         run: make check-source check-native-cpu PYTHON_CANDIDATES="$(brew --prefix python@3.13)/bin/python3.13"
+      # The port's own checks, as separate steps: adding them to upstream's
+      # `make check-source` line would conflict at every merge for no gain.
+      # docs/apple78-port.md, "Keeping the branch rebasable".
+      - name: Check the Apple7/8 docs cite things that exist
+        run: make apple78-check-docs
       - name: Build every native test and tool
         run: make check-native-build
       - name: Run native sanitizers
