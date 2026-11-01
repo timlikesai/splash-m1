@@ -97,9 +97,9 @@ are one-lane decode numbers on the 27B's shapes unless stated.
 | Cost | Known | Unknown |
 | --- | --- | --- |
 | Widen-to-fp32 arithmetic and the fp32 activation table | the register tile beats staging on every format that can take it | whether fp16 activations on the native half MMA path would win, and for which formats |
-| Split count / threadgroups per core | fitted tiers of 24 threadgroups per core (staged) and 24 with a 256-input floor (register), from an M1 Max and an M2 Max | whether a fitted occupancy law, as Apple10 now has, beats a tier across 7 to 76 cores |
+| Split count / threadgroups per core | fitted tiers: staged on Apple7/8 keeps one tier, 24 threadgroups per core with a 512-input floor (`kMmaTiers`), and the register tile takes `kRegisterTiers` (`{4,256}`, `{32,1024}`, `{3,512,16}`), fitted on a 32-core M1 Max and a 30-core M2 Max | whether a fitted occupancy law, as Apple10 now has (`apple10Staged`), beats a tier across 7 to 76 cores |
 | Attention tile | the MPP tensor path holds most of a long-context prefill chunk or verify cycle, which is why the register tile exists; the end-to-end it enabled is measured (27B on an M1 Max: cold 8K prefill 135 tok/s, 1.5K append 121) | the 128-dimension, window and sinks geometries have no register kernels, so a model that uses them runs the slow path here |
-| Prefill command length | bounded to about 5 s so macOS does not abort it | the right bound per machine class, and whether the attention piece-work bound (2^25 row-history pairs) is what actually protects the display |
+| Prefill command length | one prefill command is bounded at 2000 ms (`kDefaultPrefillCommandMilliseconds`, `runtime/engine/Scheduler.hpp`; `--prefill-bound-ms`, `--prefill-mode full` to drop it) so macOS does not abort a GPU that keeps the display waiting | the right bound per machine class, and whether the attention piece-work bound (`kPrefillAttentionPieceWork`, 2^25 row-history pairs) is what actually protects the display |
 | MoE experts | simdgroup MMA expert tiles for shared experts of one **or two** slices, measured on Qwen3.6-35B-A3B's shapes and Flint's; a wider routing still lands on the MPP `matmul2d` | the ANE's share of an MoE layer — the runtime refuses the dense FFN split outright (`ane_ffn_share: 0` on a real MoE), so the shared expert would need its own program; at top 8 of 256 with a 512-wide shared expert against 8 × 512 routed, that is about one ninth of the layer's FFN work |
 | Coefficient chains | the span chain measured 2.4-2.8% at one lane | its form under the new per-coefficient-group chains, which is why it is off |
 
@@ -180,8 +180,10 @@ are one-lane decode numbers on the 27B's shapes unless stated.
 Ordered by expected value per unit of risk, not by size.
 
 **1. Fit the split policy to core counts, not to two Max chips.** The rule is
-`{24, 512}` and `{24, 256}` threadgroups-per-core tiers, fitted on a 32-core M1
-Max and a 30-core M2 Max. Apple10 replaced exactly this kind of rule with a
+`kMmaTiers` -- one tier of 24 threadgroups per core with a 512-input floor --
+for the staged tile, and `kRegisterTiers` for the register tile, fitted on a
+32-core M1 Max and a 30-core M2 Max. Apple10 replaced exactly this kind of rule
+with a
 measured occupancy law (`apple10Staged`: resident wave, DRAM-saturating count,
 trailing-wave cost) fit to sweeps on the M5 Max, M5 Pro and M6. The same fit is available here: sweep
 splits from 1 to 16 across the 27B and 35B shapes with
@@ -248,8 +250,9 @@ how a *64-row* staged tile would do, because the benchmark never builds one on
 this family -- the candidates are decode-shaped splits. That is a five-line
 tool change, and only then a measurement.
 
-**8. Retune the display-facing bounds per machine.** `kIsolatedPrefillMilliseconds`
-(5 s) and `kPrefillAttentionPieceWork` (2^25 row-history pairs) were picked so a
+**8. Retune the display-facing bounds per machine.**
+`kDefaultPrefillCommandMilliseconds` (2000 ms, `runtime/engine/Scheduler.hpp`)
+and `kPrefillAttentionPieceWork` (2^25 row-history pairs) were picked so a
 Max-class GPU would not abort a long prefill. A 76-core Ultra and an 8-core base
 M1 want different numbers, and the wrong one costs throughput (too small) or a
 wedged GPU (too large).
@@ -283,23 +286,26 @@ GPU is a generation older and the memory is 128 GB, which is the first
 configuration where a 35B MoE, a 128K context and streamed experts all coexist
 (`--expert-memory`, unmeasured anywhere).
 
-**The M2 Ultra (family 8, up to 76 cores)** closes item 1 and item 8, the two
-that are fits over a range rather than correctness questions:
+**The M2 Ultra (family 8, up to 76 GPU cores, 64 GB)** closes item 1 and item
+8, the two that are fits over a range rather than correctness questions:
 
 - Item 1, the split tiers: `dev/benchmarks/apple78/run.py --label m2ultra-tiers
   --build`, then `compare.py baseline m2ultra-tiers --policy` shows how far the
-  `{24, 512}` / `{24, 256}` threadgroups-per-core rule, fitted at 30 and 32
-  cores, drifts at 64 and 76. A 2% mean at one end is nothing; 15% is a law.
+  staged tier `kMmaTiers` (24 threadgroups per core, 512-input floor) and
+  `kRegisterTiers` rule, fitted at 30 and 32 cores, drifts at 64 and 76. A 2%
+  mean at one end is nothing; 15% is a law.
   Sweeping splits explicitly (`benchmark-gguf-projection`, splits 1 to 16 over
   the 27B and 35B shapes) gives the occupancy curve the Apple10 law was built
   from, which is what would replace the tiers.
-- Item 8, the display-facing bounds: `kIsolatedPrefillMilliseconds` and
-  `kPrefillAttentionPieceWork` are one number for every GPU. At 76 cores a
-  5-second prefill bound is 2.5x more work per command than at 30; at 8 cores
-  it is less. Measure with `backend-benchmark --scenario context` on each, and
-  watch for the abort that bound exists to prevent.
-- The MoE spill path at 64 cores with 128 or 192 GB, where resident experts
-  stop being a question — the counterfactual for the memory finding in Taken.
+- Item 8, the display-facing bounds: `kDefaultPrefillCommandMilliseconds`
+  (2000 ms) and `kPrefillAttentionPieceWork` (2^25 row-history pairs) are one
+  number for every GPU. At 64 cores a 2-second bound is twice the work per
+  command it is at 30; at 8 cores it is far less. Measure with
+  `backend-benchmark --scenario context` and `--prefill-bound-ms`, and watch for
+  the abort that bound exists to prevent.
+- The MoE spill path at 64 cores with 64 GB, where a 35B MoE's 17.3 GB of
+  experts and a long context can be resident together — the counterfactual for
+  the streaming finding in Taken, which was measured on 32 GB where it cannot.
 
 **A base M1 or M2 (7 to 10 cores, 8 to 16 GB)** is the other end of item 1 and
 the only place the fork's most likely user lives. It is where `--expert-memory`
