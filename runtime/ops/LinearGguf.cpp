@@ -535,16 +535,30 @@ LinearConfig Linear::ggufBaseline(LinearWorkload w, std::span<const Projection *
   // A four-lane step of the affine weights whose coefficients span 64 inputs
   // (MLX 4-bit and 8-bit) stages on the MMA kernels rather than running the
   // register tile: at 32 rows the staged tile's per-element dequantization
-  // pays for itself, where at one to three the register tile wins by 6 to 40%.
-  // On a 30-core M2 Max, the staged tile's best split against the register
-  // tile's best, one projection: +5.7% at 12288x5120, +6.4% at 5120x6144,
-  // +6.7% at 17408x5120, +6.8% for its gate/up pair and +7.2% at
-  // 5120x17408, +8.2% for af8g64, +12.8% for the vocabulary's 248320x5120;
-  // af4g64 repeats within 0.2% over two runs. Q4_K keeps the register tile at
-  // four lanes (staged is 6.8% slower there), and af4g128 gains only +1.2%,
-  // so the rule is the coefficient's 64-input span, not the rows alone.
+  // pays for itself -- but only for a projection big enough to be streaming
+  // its weights at all. On a 30-core M2 Max, the staged tile's best split
+  // against the register tile's best at four lanes, positive meaning staged:
+  // +13.1% at 248320x2048, +7.2% at 5120x17408, +6.7% at 17408x5120 (+6.8% for
+  // its gate/up pair), +6.4% at 5120x6144, +5.7% at 12288x5120, +4.9% at
+  // 12288x2048, +4.2% at 16384x2048, +10.5% at 8192x2048, +3.7% at 4096x4096,
+  // +1.1% at 2048x8192; and negative below that: -0.6% at 4096x2048, -3.6% at
+  // 6144x2048, -5.9% at 2048x4096, -15.3% at 2048x2048. Every measurement
+  // repeats within 0.2% across runs.
+  //
+  // The sign tracks N x K, the weights' element count, not their bytes: the
+  // same shapes at 2, 4 and 8 bits land in the same place (+9.7% af2g64,
+  // +10.5% af4g64 and -14.2% af8g64 where its 4-bit twin measured -15.3%), so
+  // what the staged tile buys is dequantization work spread over enough output
+  // elements rather than bandwidth saved. 1<<24 elements separates the two
+  // signs with nothing between 12.6M and 16.8M measured. Without that floor the
+  // rule cost a 35B MoE model up to 5.9% on its o projection: the 27B's
+  // K = 5120 shapes that motivated it are not the shapes a small-hidden MoE
+  // model has. Q4_K keeps the register tile at every size (6.8% slower staged
+  // at four lanes), and af4g128 gains only +1.2%, so the format's 64-input
+  // span is still required, not just the size.
   if (mmaTiles(family_) && w.phase == LinearPhase::Decode &&
       w.rows == 4 * SPLASH_TARGET_VERIFY_ROWS &&
+      uint64_t{n} * k >= (uint64_t{1} << 24) &&
       everyQuantizedSegment(projections, apple7StagesSpanFormat))
     return stagedDecode(n, k, w.rows, weightBits16(projections, shape), gpuCores_, family_);
   if (mmaTiles(family_) && shape.registerFormats && everyQuantizedSegment(projections, registerTileTakes)) {
