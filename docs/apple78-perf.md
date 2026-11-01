@@ -242,17 +242,35 @@ where the dense split won 24% because the whole FFN moved. MoE's FFN time is
 better spent on the expert tiles themselves, which is what the `_s2` work and
 item 2 (fp16 activations, which halves what an activation table costs) address.
 
-**5. Compile the register attention tile for 128-dimension heads.** Upstream's
-1.5 geometry table added a 128-dimension, sinks-and-window model class. The
-register tile falls back to MPP there, which is correct and slow, so a new
-model of that shape will look broken on old hardware. The tile is templated on
-`HeadDim` now, but the register kernels here are not: `paged_attention_sgf.h`
-reads `SPLASH_KV_HEAD_DIMENSION` as a build-time constant in its tile body
-(line 150) and in its addressing (line 194), so this is first a
-parameterization of `D` through `q8sgf::tile` and its register budget, then
-instantiation, then numerics. Doubling `D` doubles what a tile holds in
-registers, and a tile that spills is plausibly slower than the MPP path it
-replaces, so the win is not assumed until measured at 128 on this hardware.
+**5. The register attention tile has one head dimension and no window — but
+what that costs today is 0.7%.** `runtime/metal/abi/KvExtent.h` fixes
+`SPLASH_KV_HEAD_DIMENSION` at 256, and `registerTileFor` also refuses any
+`variant.windowTokens` or `kernel.sinks` geometry, so anything not 256-dim,
+single-part, unwindows and sinkless geometry runs the MPP path.
+
+Measured on the models actually served here: Qwen3.8-27B and Qwen3.6-35B-A3B
+both have `head_dim: 256`, `full_attention_interval: 4` and GDN linear attention
+between, so their targets take the register tile (`prefill_attention_q8_split_sgf`,
+`verify_attention_q8_split_sgf`) and the MPP fallback costs nothing on the
+target. **The draft does not escape:** the shared DFlash2 draft is
+`head_dim: 128` with `sliding_window: 2048`, so its attention is
+`draft_attention_bf16_split` — the MPP one — on every decode cycle of every
+model this fork serves. In the B1 profile that is 0.671 ms of a 97.26 ms cycle,
+**0.7%**, and the draft's own 2048-token window bounds it: it does not grow with
+context, and there is no draft attention in the prefill section at all.
+
+Two corrections to how I first framed this. Register pressure goes the *other*
+way from what I assumed — 128 is half of 256, so a 128-dim tile is cheaper in
+registers than the one that exists, not more likely to spill; and the item's
+motivation was upstream's 128-dim sinks-and-window *target* class, which remains
+a real risk for a model of that shape (there the fallback applies to full
+attention, whose cost does grow with context) but is not what is installed here.
+
+So: ~0.5% is the prize on this draft today, which is not worth the
+parameterization; the trigger to revisit is a *target* model with 128-dim heads
+or a sliding window, and `dev/benchmarks/attention_sweep.mm` measures that in
+minutes the day one appears. Window support is the more general gap of the two,
+since plenty of 256-dim-capable architectures window.
 
 **6. Re-derive the span chain.** Worth 2.4-2.8% at one lane, 0.7-1.6% at two to
 four. Blocked on the chain restructure, not on measurement.
