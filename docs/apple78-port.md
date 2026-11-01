@@ -105,6 +105,46 @@ bf16, and the fused kernel) because upstream now runs prefill chunks of 33 to
 64 rows through it. They are compiled from the existing template rather than
 measured: whether Apple7/8 want the 64-row tile at all, or 32, is unmeasured.
 
+## Keeping the branch rebasable
+
+Upstream moves, and the fork has to move with it without re-deriving everything
+in this file. The rule for work on this branch:
+
+- **Add, do not amend.** A new `if` block between two of upstream's lines merges
+  silently; a condition extended on one of upstream's lines conflicts with
+  every future change to that line. When a choice exists between an inserted
+  guard and an edited one, take the insertion, even when it reads slightly less
+  locally.
+- **Fork-only logic goes in fork-only files.** `moe_gguf_mma.metal`,
+  `paged_attention_sgf.h`, `gguf_linear_mma.metal` and the `apple78` tools carry
+  the port entirely, which is why they cost nothing at merge time. Policy that
+  must live inside an upstream function should be a one-line call to a fork
+  function defined below it — `apple7StagesSpanFormat` and the four-lane clause
+  that uses it are two lines of upstream edited, and the rest is insertion.
+- **Never rename, reformat or reorder upstream's code** for the port's
+  convenience, and do not carry a cosmetic diff. It all shows up as conflict.
+- **Measure the surface before a merge, not during:**
+
+  ```sh
+  dev/tools/apple78-rebase-audit.py --upstream <upstream-ref>
+  dev/tools/apple78-rebase-audit.py --upstream <upstream-ref> --show runtime/ops/LinearGguf.cpp
+  ```
+
+  Against 1.5.0 (`a56988e7`) the branch edits 58 of upstream's files. Of the 424
+  upstream lines its diff removes, 36 only *moved* within the file, which git
+  resolves on its own; the other 388 are real edits, concentrated in a handful
+  of places: 41 lines in `linear_gguf_sgmatrix.metal` (upstream's register tile
+  given the port's template arguments), 31 in `hyper_connection.metal`, 28 in
+  `LinearGguf.cpp`, 21 in `block_indexer.metal`, 20 in `gdn.metal`. `--show`
+  prints each one with what replaced it, so a conflicted file is worked through
+  as a list rather than guessed at, and names lines that merely moved. Files
+  matching `apple7`, `_sgf`, `_mma` or `apple78` are marked as the branch's own,
+  because they will never conflict: they are not upstream's.
+
+  The rule works when the numbers hold. The four-lane affine rule (`d9d77ed0`)
+  is 23 added lines in `LinearGguf.cpp` and no deleted ones: a new predicate
+  under the other predicates, and one inserted `if` above the register tile's.
+  Nothing upstream was rewritten, so the next merge will not hear about it.
 ## Verification
 
 Every claim about this branch needs a machine of its own, because upstream's CI
