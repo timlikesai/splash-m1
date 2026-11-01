@@ -152,9 +152,16 @@ constexpr auto kTicketWaitSlice = std::chrono::seconds(1);
 // The queue's outstanding command buffers; a command takes one, and one more
 // per buffer its event steps add (addedBuffers).
 constexpr NSUInteger kMaximumCommandBuffers = 512;
-// The most loads host_step_wait spins for: 60-190 ms on the M5 Max (0.23-0.71
-// us a load), longer than nearly every step's work.
-constexpr uint32_t kHostStepWaitLoads = 1u << 18;
+// The most loads host_step_wait spins for: 2-6 ms on the M5 Max (0.23-0.71
+// us a load), shorter than the macOS interactivity budget a GPU held for
+// would blow (ImpactingInteractivity aborts the command and the backend
+// gives up on): a step whose work runs that long (a load that reads its
+// experts from the source files rather than the read-ahead) ends the spin
+// at its bound, and the GPU idles through the rest of it as it would
+// without the spin. The bound is past every warm step's work (a load the
+// read-ahead feeds ends in a few hundred us), so a spin ends at its
+// release, not its bound, whenever it can.
+constexpr uint32_t kHostStepWaitLoads = 1u << 13;
 // Where in the spin's release buffer (HostStepSpin) host_step_wait writes the
 // release it saw and the loads it made before: a cache line past the counter
 // the CPU raises (word 0).
@@ -1251,7 +1258,7 @@ struct MetalBackend::Impl {
     // raise the release counter. host_step_wait looks through a memory scope
     // that Metal's public headers leave out (host_step.metal), and should a
     // Metal release stop honoring it, the work after every awake step would
-    // wait out the spin's bound, 60 ms or more. So before the first command
+    // wait out the spin's bound, a few ms. So before the first command
     // with an awake step is encoded, the backend builds the spin
     // (HostStepSpin), and one spin runs on a queue of its own and is released
     // 2 ms after its commit, while it spins: it must end at that release, not
