@@ -143,17 +143,28 @@ are one-lane decode numbers on the 27B's shapes unless stated.
   their experts far more than that, so the policy keeps MMA throughout.
   `gguf-moe-sigmoid` builds the test with `GGUF_MOE_SHARED_SLICES=2`, so the
   numerics here are the shipped test, not a custom run.
-- **The dense ANE split needs no tuning on these chips** (measured, not
-  assumed). Qwen3.8-27B-4bit on the M2 Max, prefill FFN share forced with
-  `--ane-ffn-share`, medians of two samples over eleven scenario and length
-  combinations (`dev/benchmarks/apple78/ane.py`): a 0.25 share is 15.4% faster
-  than the GPU alone, 0.5 is 17.1% faster, and the runtime's own calibration —
-  which chose 0.41 with a 256-row minimum — is **24.1% faster**, beating both
-  fixed shares on every row including the 480-row chunks below its stated
-  minimum. Calibration costs 75.7 s once per model, device and macOS version,
-  and `ane::remember` keeps it in the per-user cache, so a restart is free. The
-  opportunity listed below as "give ANE a fairer share" is closed: a fitted
-  share beats a hand-picked one here too.
+- **The dense ANE split needed no tuning at 30 cores, and needs some at 60**
+  (measured, not assumed). Qwen3.8-27B-4bit on the M2 Max, prefill FFN share
+  forced with `--ane-ffn-share`, medians of two samples over eleven scenario and
+  length combinations (`dev/benchmarks/apple78/ane.py`): a 0.25 share is 15.4%
+  faster than the GPU alone, 0.5 is 17.1% faster, and the runtime's own
+  calibration — which chose 0.41 with a 256-row minimum — is **24.1% faster**,
+  beating both fixed shares on every row including the 480-row chunks below its
+  stated minimum. Calibration costs 75.7 s once per model, device and macOS
+  version, and `ane::remember` keeps it in the per-user cache, so a restart is
+  free.
+
+  The M2 Ultra then refuted the generalization. There the calibration chose share
+  0.2647 with a **523-row** minimum and gained 10.8%, while a fixed 0.25 share at
+  the low floor gained **14.1%** — for the first time a hand-picked share beat
+  the machine's own fit (#10). The ANE is the same 16 cores on both machines; the
+  GPU doubled, so the curve's peak moved left and the calibration's row floor
+  forfeited every short chunk under 523 rows. Two consequences: "closed" was
+  wrong as written, and the interesting quantity is not the share alone but the
+  **share-floor pair** the calibration is allowed to reach — the search that
+  found 0.41/256 on one machine found 0.26/523 on the other, and only one of
+  those is a good answer. Tracked in #10 and #14 row 1; until it resolves, do not
+  cite a single ANE number for "Apple7/8".
 - **Qwen3.6-35B-A3B, both packages, measured here** (a real MoE at last: 256
   experts, top 8, shared expert one slice, so the MMA expert tile applies).
   End to end the **MLX 4-bit package is the faster one**: 34.2 ms per one-lane
@@ -259,11 +270,14 @@ would give up the exactness argument that makes Apple7/8's outputs defensible.
 *Decides:* whether 2-4% is worth re-opening the numerics story; the sizing says
 pursue it only after items 1, 7 and 9.
 
-**3. ~~Give the ANE a fair share on these GPUs.~~ Closed** — see Taken. The
-calibration's own choice beats a fixed share by 7 points of prefill time, so
-the remaining ANE question is not the share but the 75.7 s it costs on a new
-macOS version, and whether a family-fitted starting guess would shorten the
-search rather than replace it.
+**3. Give the ANE a fair share on these GPUs — reopened at 60 cores.** Closed on
+the M2 Max, where the calibration beat every fixed share by 7 points of prefill
+time; the M2 Ultra found the opposite (#10), where a fixed 0.25 share at the
+default row floor beats the calibration's 0.26/523 by 3.3 points. So the item is
+not "is the share right" but "is the *search* right": what neighbourhood, floors
+and stopping rule make the fit land at 0.25/256 on a 60-core GPU and 0.41/256 on
+a 30-core one. *Decides:* whether calibration output can be trusted as
+machine-generic at all, or whether the docs must carry per-class numbers.
 
 **4. ~~MoE on the ANE, shared expert first.~~ Closed as not worth a program.**
 Measured on Qwen3.6-35B-A3B (256 experts, top 8, shared expert one slice) on
