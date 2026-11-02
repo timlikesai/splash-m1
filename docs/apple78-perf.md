@@ -130,6 +130,21 @@ are one-lane decode numbers on the 27B's shapes unless stated.
   samples each. The lesson is in the rule's comment: a policy fitted on one
   model's shape list is a guess about every other model's.
 
+  **The floor does not hold at 60 cores, and the boundary is not a size at all.**
+  Reading the same shapes on an M2 Ultra (#16, measured there on 166facc1) keeps
+  the direction -- register below, staged above -- and moves the position:
+  8192x2048 and 4096x4096, both exactly 1<<24, win by staging here (+10.5%,
+  +3.7%) and lose by 15.3-43.7% there. And the 27B's two 89M projections,
+  transposes of each other, split *opposite ways* at 60 cores (17408x5120 stages
+  better, 5120x17408 registers better), so `N x K` cannot be the whole rule: the
+  orientation, which dimension is N, belongs in it. What the two machines' data
+  jointly supports is applying the rule only where it was measured, at 32 cores
+  or fewer, and nothing between 32 and 60 is known at all. Until a boundary is
+  fitted across core counts, **this rule is a 7-9% per-projection regression on a
+  60-core 27B** -- the mechanism behind that machine's four-lane gap. The
+  end-to-end numbers above stand as measurements of this machine; "splits cleanly
+  at 1<<24" was never a claim about every Mac, and read as one it cost time.
+
 - **Two-slice MoE routings run their experts on tensor hardware now.** The MMA
   expert kernels existed only for a one-slice shared expert, so Flint-class
   routings — sigmoid router, shared expert two experts wide — fell to the
